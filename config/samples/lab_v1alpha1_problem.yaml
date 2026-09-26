@@ -20,3 +20,25 @@ spec:
     - name: "web"
       node: "web-node"
       interface: "eth0"
+---
+apiVersion: lab.icttoracon.net/v1alpha1
+kind: Problem
+metadata:
+  labels:
+    app.kubernetes.io/name: ictsc-kocto
+    app.kubernetes.io/managed-by: kustomize
+  name: problem-sample-2
+spec:
+  source:
+    repository: "https://github.com/example/repo.git"
+    commitHash: "1234567890abcdef"
+    directory: "problems/sample-2"
+    topologyFile: "topology.yaml"
+  machine:
+    cpu: 2
+    memory: "4Gi"
+    disk: "10Gi"
+  access:
+    - name: "web"
+      node: "web-node"
+      interface: "eth0"

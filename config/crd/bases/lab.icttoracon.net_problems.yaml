@@ -37,10 +37,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: specには作りたい問題環境の内容を指定します。
+            description: specには、作成する問題環境の内容を指定します。
             properties:
               access:
                 items:
+                  description: AccessEndpointは、参加者が問題環境へ接続するためのエンドポイントを表します。
                   properties:
                     interface:
                       description: Interfaceはアクセスエンドポイントが接続されるインターフェースを指定する
@@ -62,9 +63,7 @@ spec:
                 - name
                 x-kubernetes-list-type: map
               machine:
-                description: |-
-                  Machine
-                  マシンスペック
+                description: Machineは、問題環境を動かすVMのスペックを指定します。
                 properties:
                   cpu:
                     description: CPUはマシンのCPUコア数を指定する
@@ -91,9 +90,7 @@ spec:
                 - memory
                 type: object
               source:
-                description: |-
-                  Source
-                  問題を定義するリポジトリ/ディレクトリの情報を指定する
+                description: Sourceは、問題を定義するGitリポジトリやディレクトリの情報を指定します。
                 properties:
                   ansiblePlaybook:
                     description: |-
@@ -127,12 +124,12 @@ spec:
             - source
             type: object
           status:
-            description: statusにはControllerが確認した現在の状態が入ります。
+            description: statusには、コントローラーが確認した現在の状態が入ります。
             properties:
               conditions:
                 description: |-
-                  ConditionsはProblemの状態を表します。
-                  typeごとに状態を分け、True、False、Unknownで結果を示します。
+                  Conditionsは、Problemの現在の状態を表します。
+                  条件の種類ごとに状態を分け、True、False、Unknownで結果を示します。
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

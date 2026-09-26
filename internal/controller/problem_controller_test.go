@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -99,6 +100,18 @@ var _ = Describe("Problem Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			updatedProblem := &labv1alpha1.Problem{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedProblem)).To(Succeed())
+
+			readyCondition := apiMeta.FindStatusCondition(updatedProblem.Status.Conditions, "Ready")
+
+			if readyCondition == nil {
+				return
+			}
+
+			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCondition.Reason).To(Equal("ProvisionerNotImplemented"))
+			Expect(readyCondition.ObservedGeneration).To(Equal(updatedProblem.Generation))
 		})
 	})
 })

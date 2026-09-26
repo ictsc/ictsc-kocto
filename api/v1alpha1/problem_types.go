@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// Problem APIの型を定義します。
+// Problem APIで使う型を定義します。
 // フィールドを追加するときはJSONタグも指定してください。
 
 // ProblemSpecはProblemに指定する内容を表します。
@@ -31,13 +31,11 @@ type ProblemSpec struct {
 	// 型を変更したらmake manifestsとmake generateを実行してください。
 	// Kubebuilderのマーカーを使うと入力値を検証できます。
 
-	// Source
-	// 問題を定義するリポジトリ/ディレクトリの情報を指定する
+	// Sourceは、問題を定義するGitリポジトリやディレクトリの情報を指定します。
 	// +required
 	Source ProblemSourceSpec `json:"source"`
 
-	// Machine
-	// マシンスペック
+	// Machineは、問題環境を動かすVMのスペックを指定します。
 	// +required
 	Machine ProblemMachineSpec `json:"machine"`
 
@@ -74,6 +72,7 @@ type ProblemSourceSpec struct {
 	AnsiblePlaybook *string `json:"ansiblePlaybook,omitempty"`
 }
 
+// ProblemMachineSpecは、問題環境を動かすVMのスペックを表します。
 type ProblemMachineSpec struct {
 	// CPUはマシンのCPUコア数を指定する
 	// +kubebuilder:validation:Minimum=1
@@ -89,6 +88,7 @@ type ProblemMachineSpec struct {
 	Disk resource.Quantity `json:"disk"`
 }
 
+// AccessEndpointは、参加者が問題環境へ接続するためのエンドポイントを表します。
 type AccessEndpoint struct {
 	// Nameはアクセスエンドポイントの名前を指定する
 	// +required
@@ -105,11 +105,11 @@ type AccessEndpoint struct {
 
 // ProblemStatusはProblemの現在の状態を表します。
 type ProblemStatus struct {
-	// Controllerが確認した状態を表すフィールドをここに追加します。
+	// コントローラーが確認した状態を表すフィールドをここに追加します。
 	// 型を変更したらmake manifestsとmake generateを実行してください。
 
-	// ConditionsはProblemの状態を表します。
-	// typeごとに状態を分け、True、False、Unknownで結果を示します。
+	// Conditionsは、Problemの現在の状態を表します。
+	// 条件の種類ごとに状態を分け、True、False、Unknownで結果を示します。
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -123,15 +123,15 @@ type ProblemStatus struct {
 type Problem struct {
 	metav1.TypeMeta `json:",inline"`
 
-	// metadataには名前やnamespaceなどの情報が入ります。
+	// metadataには、名前やNamespaceなどの情報が入ります。
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
-	// specには作りたい問題環境の内容を指定します。
+	// specには、作成する問題環境の内容を指定します。
 	// +required
 	Spec ProblemSpec `json:"spec"`
 
-	// statusにはControllerが確認した現在の状態が入ります。
+	// statusには、コントローラーが確認した現在の状態が入ります。
 	// +optional
 	Status ProblemStatus `json:"status,omitzero"`
 }

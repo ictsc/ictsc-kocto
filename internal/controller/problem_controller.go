@@ -19,6 +19,9 @@ package controller
 import (
 	"context"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -27,7 +30,7 @@ import (
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
 )
 
-// ProblemReconciler reconciles a Problem object
+// ProblemReconcilerはProblemリソースの状態を調整します。
 type ProblemReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -37,24 +40,49 @@ type ProblemReconciler struct {
 // +kubebuilder:rbac:groups=lab.icttoracon.net,resources=problems/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=lab.icttoracon.net,resources=problems/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Problem object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
+// ReconcileはKubernetesの調整ループから呼び出され、
+// 現在の状態をProblemで指定された状態に近づけます。
+// TODO: Problemのspecと現在の状態を比較し、
+// specに合うよう必要な処理を実装します。
 //
-// For more details, check Reconcile and its Result here:
+// ReconcileとResultの詳細は次を参照してください。
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
 func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	// TODO: Problemを取得して状態を確認する処理を実装します。
+	problem := &labv1alpha1.Problem{}
+	if err := r.Get(ctx, req.NamespacedName, problem); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Problemリソースが見つからない場合は、削除された可能性があるため何もせず終了します。
+			return ctrl.Result{}, nil
+		}
+		// その他のエラーの場合はリトライするためにエラーを返します。
+		return ctrl.Result{}, err
+	}
+	log := logf.FromContext(ctx)
+	log.Info("Found Problem resource", "namespace", problem.Namespace, "name", problem.Name)
 
-	// TODO(user): your logic here
+	base := problem.DeepCopy() // DeepCopyして元の状態を保持しておく DeepCopyは元のオブジェクトを変更せずに安全に操作するために使用します。
+
+	// Status条件を更新します。ここでは、Provisionerが未実装であることを示すReady条件を設定しています。
+	changed := apiMeta.SetStatusCondition(&problem.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             "ProvisionerNotImplemented",
+		Message:            "The process for provisioning the Problem resource is not implemented yet.",
+		ObservedGeneration: problem.Generation,
+	})
+
+	// 変更があった場合はStatusを更新します。
+	if changed {
+		if err := r.Status().Patch(ctx, problem, client.MergeFrom(base)); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// SetupWithManagerはManagerにControllerを登録します。
 func (r *ProblemReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&labv1alpha1.Problem{}).

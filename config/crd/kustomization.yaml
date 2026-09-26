@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/lab.icttoracon.net_problems.yaml
+- bases/lab.icttoracon.net_problemchallenges.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
