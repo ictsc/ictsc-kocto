@@ -21,7 +21,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -56,7 +55,7 @@ var _ = Describe("ProblemChallenge Controller", func() {
 						Namespace: resourceNamespace,
 					},
 					Spec: labv1alpha1.ProblemChallengeSpec{
-						ProblemRef: corev1.LocalObjectReference{Name: "problem-sample"},
+						ProblemRef: labv1alpha1.ProblemReference{Name: "problem-sample"},
 						Placement: labv1alpha1.ProblemChallengePlacementSpec{
 							NodeSelector: map[string]string{
 								"lab.icttoracon.net/kubevirt-node": "worker-01",
@@ -91,6 +90,27 @@ var _ = Describe("ProblemChallenge Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+
+		It("rejects an empty Problem reference name", func() {
+			resource := &labv1alpha1.ProblemChallenge{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "empty-problem-reference",
+					Namespace: resourceNamespace,
+				},
+				Spec: labv1alpha1.ProblemChallengeSpec{
+					ProblemRef: labv1alpha1.ProblemReference{},
+					Placement: labv1alpha1.ProblemChallengePlacementSpec{
+						NodeSelector: map[string]string{
+							"lab.icttoracon.net/kubevirt-node": "worker-01",
+						},
+					},
+					Teams: []labv1alpha1.ProblemChallengeTeamSpec{{ID: "team-001"}},
+				},
+			}
+
+			err := k8sClient.Create(ctx, resource)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
 		})
 	})
 })

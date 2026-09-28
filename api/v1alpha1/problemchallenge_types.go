@@ -17,7 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -30,7 +29,7 @@ type ProblemChallengeSpec struct {
 	// ProblemRefは、出題するProblemの名前を指定します。
 	// ProblemChallengeと同じnamespaceにあるProblemを参照します。
 	// +required
-	ProblemRef corev1.LocalObjectReference `json:"problemRef"`
+	ProblemRef ProblemReference `json:"problemRef"`
 
 	// Placementは、この出題機会に作成するすべてのVMの配置条件を指定します。
 	// +required
@@ -43,6 +42,14 @@ type ProblemChallengeSpec struct {
 	// +listMapKey=id
 	// +required
 	Teams []ProblemChallengeTeamSpec `json:"teams"`
+}
+
+// ProblemReferenceは、同じnamespaceにあるProblemへの参照を表します。
+type ProblemReference struct {
+	// Nameは、参照するProblemの名前を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Name string `json:"name"`
 }
 
 // ProblemChallengePlacementSpecは、チーム環境を実行するKubernetes Nodeの条件を表します。

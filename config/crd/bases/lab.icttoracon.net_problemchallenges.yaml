@@ -59,16 +59,12 @@ spec:
                   ProblemChallengeと同じnamespaceにあるProblemを参照します。
                 properties:
                   name:
-                    default: ""
-                    description: |-
-                      Name of the referent.
-                      This field is effectively required, but due to backwards compatibility is
-                      allowed to be empty. Instances of this type with an empty value here are
-                      almost certainly wrong.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    description: Nameは、参照するProblemの名前を指定します。
+                    minLength: 1
                     type: string
+                required:
+                - name
                 type: object
-                x-kubernetes-map-type: atomic
               teams:
                 description: |-
                   Teamsは、この出題機会に問題環境を作成するチームの一覧です。
