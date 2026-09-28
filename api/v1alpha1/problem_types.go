@@ -86,6 +86,18 @@ type ProblemMachineSpec struct {
 	// Diskはマシンのディスク容量を指定する
 	// +required
 	Disk resource.Quantity `json:"disk"`
+
+	// Imageは、VMの起動元となるイメージを指定する
+	// +required
+	Image ProblemMachineImageSpec `json:"image"`
+}
+
+// ProblemMachineImageSpecは、問題環境VMの起動元を表します。
+type ProblemMachineImageSpec struct {
+	// ContainerDiskは、VMの起動元として使うコンテナディスクイメージを指定する
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	ContainerDisk string `json:"containerDisk"`
 }
 
 // AccessEndpointは、参加者が問題環境へ接続するためのエンドポイントを表します。

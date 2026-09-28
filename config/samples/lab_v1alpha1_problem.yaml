@@ -16,6 +16,8 @@ spec:
     cpu: 2
     memory: "4Gi"
     disk: "10Gi"
+    image:
+      containerDisk: "ghcr.io/ictsc/kocto-runner:latest"
   access:
     - name: "web"
       node: "web-node"
@@ -38,6 +40,8 @@ spec:
     cpu: 2
     memory: "4Gi"
     disk: "10Gi"
+    image:
+      containerDisk: "ghcr.io/ictsc/kocto-runner:latest"
   access:
     - name: "web"
       node: "web-node"

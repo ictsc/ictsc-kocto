@@ -42,13 +42,11 @@ type ProblemReconciler struct {
 
 // ReconcileはKubernetesの調整ループから呼び出され、
 // 現在の状態をProblemで指定された状態に近づけます。
-// TODO: Problemのspecと現在の状態を比較し、
-// specに合うよう必要な処理を実装します。
+// TODO: Problemのmachine設定とimageを基に、KubeVirt上へ検証用VMを用意します。
 //
 // ReconcileとResultの詳細は次を参照してください。
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
 func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	// TODO: Problemを取得して状態を確認する処理を実装します。
 	problem := &labv1alpha1.Problem{}
 	if err := r.Get(ctx, req.NamespacedName, problem); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -63,7 +61,8 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	base := problem.DeepCopy() // DeepCopyして元の状態を保持しておく DeepCopyは元のオブジェクトを変更せずに安全に操作するために使用します。
 
-	// Status条件を更新します。ここでは、Provisionerが未実装であることを示すReady条件を設定しています。
+	// TODO: ここにKubeVirt VMの準備処理を追加します。VMを作成する処理はまだ実装しません。
+	// 現状はProvisionerが未実装であることをReady条件で示します。
 	changed := apiMeta.SetStatusCondition(&problem.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,

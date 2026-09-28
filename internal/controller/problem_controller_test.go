@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"io"
+	"os"
+	"path/filepath"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,6 +28,7 @@ import (
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -66,6 +70,9 @@ var _ = Describe("Problem Controller", func() {
 							CPU:    2,
 							Memory: resource.MustParse("4Gi"),
 							Disk:   resource.MustParse("10Gi"),
+							Image: labv1alpha1.ProblemMachineImageSpec{
+								ContainerDisk: "ghcr.io/ictsc/kocto-runner:latest",
+							},
 						},
 						Access: []labv1alpha1.AccessEndpoint{{
 							Name:      "web",
@@ -102,6 +109,7 @@ var _ = Describe("Problem Controller", func() {
 			// Example: If you expect a certain status condition after reconciliation, verify it here.
 			updatedProblem := &labv1alpha1.Problem{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedProblem)).To(Succeed())
+			Expect(updatedProblem.Spec.Machine.Image.ContainerDisk).To(Equal("ghcr.io/ictsc/kocto-runner:latest"))
 
 			readyCondition := apiMeta.FindStatusCondition(updatedProblem.Status.Conditions, "Ready")
 
@@ -112,6 +120,39 @@ var _ = Describe("Problem Controller", func() {
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCondition.Reason).To(Equal("ProvisionerNotImplemented"))
 			Expect(readyCondition.ObservedGeneration).To(Equal(updatedProblem.Generation))
+		})
+
+		It("accepts every Problem in the sample YAML with a container disk image", func() {
+			By("decoding each Problem from the sample YAML")
+			samplePath := filepath.Join("..", "..", "config", "samples", "lab_v1alpha1_problem.yaml")
+			sampleYAML, err := os.Open(samplePath)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { Expect(sampleYAML.Close()).To(Succeed()) })
+			decoder := utilyaml.NewYAMLOrJSONDecoder(sampleYAML, 4096)
+
+			sampleCount := 0
+			for {
+				var sample labv1alpha1.Problem
+				err := decoder.Decode(&sample)
+				if err == io.EOF {
+					break
+				}
+				Expect(err).NotTo(HaveOccurred())
+				sample.Namespace = resourceNamespace
+				sample.Name = "schema-" + sample.Name
+
+				By("creating the sample through the API server schema")
+				Expect(k8sClient.Create(ctx, &sample)).To(Succeed())
+				DeferCleanup(func() {
+					Expect(k8sClient.Delete(ctx, &sample)).To(Succeed())
+				})
+
+				created := &labv1alpha1.Problem{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: sample.Namespace, Name: sample.Name}, created)).To(Succeed())
+				Expect(created.Spec.Machine.Image.ContainerDisk).To(Equal("ghcr.io/ictsc/kocto-runner:latest"))
+				sampleCount++
+			}
+			Expect(sampleCount).To(BeNumerically(">", 0))
 		})
 	})
 })

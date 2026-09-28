@@ -77,6 +77,16 @@ spec:
                     description: Diskはマシンのディスク容量を指定する
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                  image:
+                    description: Imageは、VMの起動元となるイメージを指定する
+                    properties:
+                      containerDisk:
+                        description: ContainerDiskは、VMの起動元として使うコンテナディスクイメージを指定する
+                        minLength: 1
+                        type: string
+                    required:
+                    - containerDisk
+                    type: object
                   memory:
                     anyOf:
                     - type: integer
@@ -87,6 +97,7 @@ spec:
                 required:
                 - cpu
                 - disk
+                - image
                 - memory
                 type: object
               source:
