@@ -1,0 +1,35 @@
+apiVersion: lab.icttoracon.net/v1alpha1
+kind: ProblemChallenge
+metadata:
+  labels:
+    app.kubernetes.io/name: ictsc-kocto
+    app.kubernetes.io/managed-by: kustomize
+  name: problemchallenge-sample
+spec:
+  problemRef:
+    name: problem-sample
+  placement:
+    # 対象のKubernetes Nodeだけに付いているラベルを指定します。
+    nodeSelector:
+      lab.icttoracon.net/kubevirt-node: "worker-01"
+  teams:
+    - id: "team-001"
+    - id: "team-002"
+---
+apiVersion: lab.icttoracon.net/v1alpha1
+kind: ProblemChallenge
+metadata:
+  labels:
+    app.kubernetes.io/name: ictsc-kocto
+    app.kubernetes.io/managed-by: kustomize
+  name: problemchallenge-sample-2
+spec:
+  problemRef:
+    name: problem-sample-2
+  placement:
+    # 対象のKubernetes Nodeだけに付いているラベルを指定します。
+    nodeSelector:
+      lab.icttoracon.net/kubevirt-node: "worker-01"
+  teams:
+    - id: "team-001"
+    - id: "team-002"
