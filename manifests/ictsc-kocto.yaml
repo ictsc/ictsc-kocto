@@ -1,0 +1,781 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+    control-plane: controller-manager
+  name: ictsc-kocto-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: problemchallenges.lab.icttoracon.net
+spec:
+  group: lab.icttoracon.net
+  names:
+    kind: ProblemChallenge
+    listKind: ProblemChallengeList
+    plural: problemchallenges
+    singular: problemchallenge
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ProblemChallengeは、ある出題機会における全チーム分の問題環境を表すリソースです。
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: specには、出題するProblem、配置条件、対象チームを指定します。
+            properties:
+              placement:
+                description: Placementは、この出題機会に作成するすべてのVMの配置条件を指定します。
+                properties:
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      NodeSelectorは、KubeVirtのVMを実行するKubernetes Nodeをラベルで絞り込みます。
+                      すべてのチーム環境を同じNodeに配置するには、対象Nodeだけに付けたラベルを指定してください。
+                    minProperties: 1
+                    type: object
+                required:
+                - nodeSelector
+                type: object
+              problemRef:
+                description: |-
+                  ProblemRefは、出題するProblemの名前を指定します。
+                  ProblemChallengeと同じnamespaceにあるProblemを参照します。
+                properties:
+                  name:
+                    description: Nameは、参照するProblemの名前を指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              teams:
+                description: |-
+                  Teamsは、この出題機会に問題環境を作成するチームの一覧です。
+                  チームごとに1つの問題環境を作成します。
+                items:
+                  description: ProblemChallengeTeamSpecは、問題環境を作成するチームを表します。
+                  properties:
+                    id:
+                      description: IDは、チームを識別する一意なIDを指定します。
+                      minLength: 1
+                      type: string
+                  required:
+                  - id
+                  type: object
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
+                x-kubernetes-list-type: map
+            required:
+            - placement
+            - problemRef
+            - teams
+            type: object
+          status:
+            description: statusには、コントローラーが確認した現在の状態が入ります。
+            properties:
+              conditions:
+                description: |-
+                  Conditionsは、ProblemChallengeの状態を種類ごとに表します。
+                  各条件は異なる側面の状態を示し、種類ごとに1つ設定します。
+
+                  よく使われる条件の種類には、次のものがあります。
+                  - "Available": リソースが利用可能な状態
+                  - "Progressing": リソースを作成または更新している状態
+                  - "Degraded": リソースが期待した状態にならない、または維持できない状態
+
+                  各条件の状態にはTrue、False、Unknownのいずれかを設定します。
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: problems.lab.icttoracon.net
+spec:
+  group: lab.icttoracon.net
+  names:
+    kind: Problem
+    listKind: ProblemList
+    plural: problems
+    singular: problem
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Problemは問題環境を表すリソースです。
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: specには、作成する問題環境の内容を指定します。
+            properties:
+              access:
+                items:
+                  description: AccessEndpointは、参加者が問題環境へ接続するためのエンドポイントを表します。
+                  properties:
+                    interface:
+                      description: Interfaceはアクセスエンドポイントが接続されるインターフェースを指定する
+                      type: string
+                    name:
+                      description: Nameはアクセスエンドポイントの名前を指定する
+                      type: string
+                    node:
+                      description: Nodeはアクセスエンドポイントが接続されるノードを指定する
+                      type: string
+                  required:
+                  - interface
+                  - name
+                  - node
+                  type: object
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              machine:
+                description: Machineは、問題環境を動かすVMのスペックを指定します。
+                properties:
+                  cpu:
+                    description: CPUはマシンのCPUコア数を指定する
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  disk:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Diskはマシンのディスク容量を指定する
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  image:
+                    description: Imageは、VMの起動元となるイメージを指定する
+                    properties:
+                      containerDisk:
+                        description: ContainerDiskは、VMの起動元として使うコンテナディスクイメージを指定する
+                        minLength: 1
+                        type: string
+                    required:
+                    - containerDisk
+                    type: object
+                  memory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: Memoryはマシンのメモリ容量を指定する
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                required:
+                - cpu
+                - disk
+                - image
+                - memory
+                type: object
+              source:
+                description: Sourceは、問題を定義するGitリポジトリやディレクトリの情報を指定します。
+                properties:
+                  ansiblePlaybook:
+                    description: |-
+                      AnsiblePlaybookは問題環境の構築に使用するAnsibleプレイブックを指定する
+                      Directoryからの相対パスを指定する
+                    type: string
+                  commitHash:
+                    description: CommitHashはGitリポジトリのコミットハッシュを指定する
+                    type: string
+                  directory:
+                    description: |-
+                      DirectoryはGitリポジトリ内のディレクトリを指定する
+                      空の場合はリポジトリのルートディレクトリを指定する
+                    type: string
+                  repository:
+                    description: RepositoryはGitリポジトリのURLを指定する
+                    type: string
+                  topologyFile:
+                    description: |-
+                      TopologyFileは問題環境のトポロジーファイルを指定する
+                      Directoryからの相対パスを指定する
+                    type: string
+                required:
+                - commitHash
+                - repository
+                - topologyFile
+                type: object
+            required:
+            - access
+            - machine
+            - source
+            type: object
+          status:
+            description: statusには、コントローラーが確認した現在の状態が入ります。
+            properties:
+              conditions:
+                description: |-
+                  Conditionsは、Problemの現在の状態を表します。
+                  条件の種類ごとに状態を分け、True、False、Unknownで結果を示します。
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-controller-manager
+  namespace: ictsc-kocto-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-leader-election-role
+  namespace: ictsc-kocto-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ictsc-kocto-manager-role
+rules:
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges
+  - problems
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges/finalizers
+  - problems/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges/status
+  - problems/status
+  verbs:
+  - get
+  - patch
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ictsc-kocto-metrics-auth-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ictsc-kocto-metrics-reader
+rules:
+- nonResourceURLs:
+  - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-problem-admin-role
+rules:
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problems
+  verbs:
+  - '*'
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problems/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-problem-editor-role
+rules:
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problems
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problems/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-problem-viewer-role
+rules:
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problems
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problems/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-problemchallenge-admin-role
+rules:
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges
+  verbs:
+  - '*'
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-problemchallenge-editor-role
+rules:
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-problemchallenge-viewer-role
+rules:
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problemchallenges/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-leader-election-rolebinding
+  namespace: ictsc-kocto-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ictsc-kocto-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: ictsc-kocto-controller-manager
+  namespace: ictsc-kocto-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+  name: ictsc-kocto-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ictsc-kocto-manager-role
+subjects:
+- kind: ServiceAccount
+  name: ictsc-kocto-controller-manager
+  namespace: ictsc-kocto-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ictsc-kocto-metrics-auth-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ictsc-kocto-metrics-auth-role
+subjects:
+- kind: ServiceAccount
+  name: ictsc-kocto-controller-manager
+  namespace: ictsc-kocto-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+    control-plane: controller-manager
+  name: ictsc-kocto-controller-manager-metrics-service
+  namespace: ictsc-kocto-system
+spec:
+  ports:
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: 8443
+  selector:
+    app.kubernetes.io/name: ictsc-kocto
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: ictsc-kocto
+    control-plane: controller-manager
+  name: ictsc-kocto-controller-manager
+  namespace: ictsc-kocto-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ictsc-kocto
+      control-plane: controller-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        app.kubernetes.io/name: ictsc-kocto
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --metrics-bind-address=:8443
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        command:
+        - /manager
+        image: ghcr.io/ictsc/ictsc-kocto:1e621a15484144fb7760dfc90a9951a6f2e41c59
+        imagePullPolicy: Always
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        name: manager
+        ports:
+        - containerPort: 8081
+          name: health
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+        volumeMounts: []
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      imagePullSecrets:
+      - name: ghcr-pull
+      serviceAccountName: ictsc-kocto-controller-manager
+      terminationGracePeriodSeconds: 10
+      volumes: []
