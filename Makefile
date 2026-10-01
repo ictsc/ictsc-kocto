@@ -121,6 +121,12 @@ dev-install: manifests kustomize ## Install this project's CRDs into DEV_CONTEXT
 	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
 	"$(KUSTOMIZE)" build config/crd | "$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f -
 
+.PHONY: dev-render
+dev-render: manifests kustomize ## Render development manifests for the requested image.
+	@test -n "$(DEV_IMAGE)" || { echo "Set DEV_IMAGE to a tagged ghcr.io/ictsc/ictsc-kocto image."; exit 1; }
+	@test -n "$(DEV_MANIFEST)" || { echo "Set DEV_MANIFEST to the output manifest path."; exit 1; }
+	"$(KUSTOMIZE)" build config/default | python3 hack/set-dev-image.py "$(DEV_IMAGE)" "$(DEV_IMAGE_PULL_SECRET)" > "$(DEV_MANIFEST)"
+
 .PHONY: dev-image
 dev-image: ## Build and push a Linux image for Talos to GHCR.
 	@test -n "$(DEV_IMAGE)" || { echo "Set DEV_IMAGE to a tagged ghcr.io/ictsc/ictsc-kocto image."; exit 1; }
@@ -132,6 +138,25 @@ dev-pull-secret: ## Create a GHCR image pull Secret in DEV_CONTEXT using GHCR_TO
 	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
 	@test -n "$(DEV_IMAGE_PULL_SECRET)" || { echo "Set DEV_IMAGE_PULL_SECRET to the Secret name to create."; exit 1; }
 	DEV_CONTEXT="$(DEV_CONTEXT)" DEV_IMAGE_PULL_SECRET="$(DEV_IMAGE_PULL_SECRET)" KUBECTL="$(KUBECTL)" hack/create-ghcr-pull-secret.sh
+
+.PHONY: dev-argocd-install
+dev-argocd-install: ## Install the pinned Argo CD version into DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" create namespace argocd --dry-run=client -o yaml | "$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f -
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" apply --server-side --force-conflicts --namespace=argocd -f "https://raw.githubusercontent.com/argoproj/argo-cd/$(ARGOCD_VERSION)/manifests/install.yaml"
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" wait --for=condition=Established crd/applications.argoproj.io --timeout=5m
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" rollout status deployment/argocd-server --namespace=argocd --timeout=5m
+
+.PHONY: dev-argocd-repo
+dev-argocd-repo: ## Configure Argo CD to read this private GitHub repository.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	@test -n "$(ARGOCD_REPO_SSH_KEY)" || { echo "Set ARGOCD_REPO_SSH_KEY to the read-only GitHub deploy key path."; exit 1; }
+	DEV_CONTEXT="$(DEV_CONTEXT)" ARGOCD_REPO_SSH_KEY="$(ARGOCD_REPO_SSH_KEY)" KUBECTL="$(KUBECTL)" hack/configure-argocd-repo.sh
+
+.PHONY: dev-argocd-apply
+dev-argocd-apply: ## Configure Argo CD to sync the GitOps branch to DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f config/argocd/ictsc-kocto-dev.yaml
 
 .PHONY: dev-deploy
 dev-deploy: manifests kustomize ## Deploy the controller image to DEV_CONTEXT.
@@ -238,6 +263,9 @@ KUSTOMIZE ?= $(LOCALBIN)/kustomize
 DEV_IMAGE ?=
 DEV_IMAGE_PULL_SECRET ?=
 DEV_PLATFORM ?= linux/amd64
+DEV_MANIFEST ?=
+ARGOCD_VERSION ?= v3.5.3
+ARGOCD_REPO_SSH_KEY ?=
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint

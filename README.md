@@ -161,37 +161,73 @@ spec:
 kubectl --context="$DEV_CONTEXT" delete vm kubevirt-smoke
 ```
 
-#### コントローラーのビルドとデプロイ
+#### GitHub ActionsとArgo CDによる開発deploy
 
-`issue/#3`へのpushでGitHub Actionsが`linux/amd64`イメージをビルドし、`ghcr.io/ictsc/ictsc-kocto:<commit SHA>`へpushします。workflowには`packages: write`を付与し、GHCRへの書き込みには`GITHUB_TOKEN`を使います。pushしたcommit SHAを`DEV_IMAGE`に指定してデプロイします。
+任意branchへのpushでGitHub Actionsが`linux/amd64`イメージを作り、`ghcr.io/ictsc/ictsc-kocto:<commit SHA>`へpushします。Actionsは同じsource commitからCRDを生成し、image tagとpull Secretを設定したKubernetesマニフェストを`dev-deploy`branchへcommitします。Argo CDはそのbranchを監視し、変更をクラスタへ自動syncします。GitHub ActionsからクラスタAPIへの接続は不要です。[Argo CDの自動sync](https://argo-cd.readthedocs.io/en/stable/user-guide/auto_sync/) / [private repositoryの設定](https://argo-cd.readthedocs.io/en/stable/user-guide/private-repositories/)
+
+`dev-deploy`branchはActionsが生成するため、直接編集しません。単一の開発クラスタを共有し、最後に成功したbranch pushの内容がdeployされます。CRDはクラスタ全体で共有するため、複数branchのschemaを同時には試しません。Argo CD Applicationは`config/argocd/ictsc-kocto-dev.yaml`で定義します。
+
+Argo CD v3.5.3を導入します。GitHub Actionsが最初のpushを処理して`dev-deploy`branchを作成した後、Argo CDをbootstrapします。
 
 ```sh
 export DEV_CONTEXT=admin@ictsc-kocto-test
-export DEV_IMAGE="ghcr.io/ictsc/ictsc-kocto:$(git rev-parse HEAD)"
-export DEV_IMAGE_PULL_SECRET=ghcr-pull
-
-gh run list --branch 'issue/#3'
+make dev-argocd-install DEV_CONTEXT="$DEV_CONTEXT"
 ```
 
-privateパッケージのpull Secretには`read:packages`権限のあるトークンを使います。GH CLIの認証に権限を追加し、そのトークンをSecretへ直接保存します。リポジトリやファイルにはトークンを保存しません。
+private repositoryのread-only deploy keyを作成してGitHub repositoryに登録します。公開鍵はGitHubへ登録し、秘密鍵はArgo CD namespaceのSecretにだけ保存します。
 
 ```sh
-gh auth refresh --hostname github.com --scopes read:packages
-export GHCR_TOKEN="$(gh auth token)"
-make dev-pull-secret DEV_CONTEXT="$DEV_CONTEXT" DEV_IMAGE_PULL_SECRET="$DEV_IMAGE_PULL_SECRET"
-unset GHCR_TOKEN
+export ARGOCD_REPO_KEY="$HOME/.ssh/ictsc-kocto-argocd-readonly"
+ssh-keygen -t ed25519 -N '' -C 'argocd-ictsc-kocto-readonly' -f "$ARGOCD_REPO_KEY"
+gh api repos/ictsc/ictsc-kocto/keys \
+  --method POST \
+  -f title=argocd-ictsc-kocto-readonly \
+  -f key="$(cat "$ARGOCD_REPO_KEY.pub")" \
+  -F read_only=true
 
-make dev-deploy DEV_CONTEXT="$DEV_CONTEXT" DEV_IMAGE="$DEV_IMAGE" \
-  DEV_IMAGE_PULL_SECRET="$DEV_IMAGE_PULL_SECRET"
-make dev-status DEV_CONTEXT="$DEV_CONTEXT"
-make dev-logs DEV_CONTEXT="$DEV_CONTEXT"
+make dev-argocd-repo DEV_CONTEXT="$DEV_CONTEXT" \
+  ARGOCD_REPO_SSH_KEY="$ARGOCD_REPO_KEY"
 ```
 
-`make dev-image DEV_IMAGE=...`はローカルから手動でamd64イメージをbuildx build／pushする場合に使えます。コントローラーをMac上で起動する場合は、`make dev-install DEV_CONTEXT="$DEV_CONTEXT"`でCRDを入れてから`make dev-run DEV_CONTEXT="$DEV_CONTEXT"`を実行します。
+Argo CDのUIはport-forwardで開けます。
+
+```sh
+kubectl --context="$DEV_CONTEXT" port-forward --namespace=argocd \
+  service/argocd-server 8080:443
+```
+
+その後`https://localhost:8080`へ接続します。initial admin passwordは次で取得できます。
+
+```sh
+kubectl --context="$DEV_CONTEXT" get secret argocd-initial-admin-secret \
+  --namespace=argocd -o jsonpath='{.data.password}' | base64 --decode
+```
+
+branchへのpush後はActionsの成功とArgo CDのsyncを確認します。
+
+```sh
+gh run list --branch "$(git branch --show-current)"
+kubectl --context="$DEV_CONTEXT" get application ictsc-kocto-dev --namespace=argocd
+kubectl --context="$DEV_CONTEXT" get deployment ictsc-kocto-controller-manager \
+  --namespace=ictsc-kocto-system
+```
+
+GHCR pull Secretには`read:packages`権限のあるトークンを使います。トークンはrepositoryやworkflow artifactへ保存しません。
+
+```sh
+export GHCR_TOKEN="$(gh auth token)"
+make dev-pull-secret DEV_CONTEXT="$DEV_CONTEXT" DEV_IMAGE_PULL_SECRET=ghcr-pull
+unset GHCR_TOKEN
+
+make dev-argocd-apply DEV_CONTEXT="$DEV_CONTEXT"
+kubectl --context="$DEV_CONTEXT" get application ictsc-kocto-dev --namespace=argocd
+```
+
+Argo CDを使わずにローカルからdeployする場合は、GHCRへpushしたimage tagを指定して`make dev-deploy DEV_CONTEXT="$DEV_CONTEXT" DEV_IMAGE=... DEV_IMAGE_PULL_SECRET=ghcr-pull`を実行します。Argo CDのsync対象を同時に手動更新しないでください。`make dev-image DEV_IMAGE=...`はローカルからamd64 imageをbuildx build／pushします。controllerをMac上で起動する場合は`make dev-install DEV_CONTEXT="$DEV_CONTEXT"`でCRDを入れてから`make dev-run DEV_CONTEXT="$DEV_CONTEXT"`を実行します。
 
 #### ログ確認と片付け
 
-`make dev-logs`はコントローラーのログをfollowします。サンプルのProblemとProblemChallengeは`make dev-cleanup DEV_CONTEXT="$DEV_CONTEXT"`で削除できます。`make dev-undeploy DEV_CONTEXT="$DEV_CONTEXT"`はコントローラーとCRDも削除し、全てのProblemとProblemChallengeを削除します。`kubevirt-smoke`は個別に削除してください。KubeVirtを含む環境全体を撤去するときは、KubeVirt CRを削除してからReleaseのoperatorマニフェストを削除します。
+`make dev-logs`はコントローラーのログをfollowします。サンプルのProblemとProblemChallengeは`make dev-cleanup DEV_CONTEXT="$DEV_CONTEXT"`で削除できます。Argo CD管理下のコントローラーとCRDを手動で片付ける場合は、先にApplicationを削除してsyncを止めてから`make dev-undeploy DEV_CONTEXT="$DEV_CONTEXT"`を実行します。`kubevirt-smoke`は個別に削除してください。KubeVirtを含む環境全体を撤去するときは、KubeVirt CRを削除してからReleaseのoperatorマニフェストを削除します。
 
 ```sh
 kubectl --context="$DEV_CONTEXT" delete kubevirt kubevirt --namespace=kubevirt --wait=true

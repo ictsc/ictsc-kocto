@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ictsc-kocto-dev
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:ictsc/ictsc-kocto.git
+    targetRevision: dev-deploy
+    path: manifests
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ictsc-kocto-system
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
