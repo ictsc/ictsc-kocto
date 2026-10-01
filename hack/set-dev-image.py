@@ -27,17 +27,20 @@ manifest, replacements = pattern.subn(
 if replacements != 1:
     raise SystemExit(f"expected one controller image in rendered manifests, found {replacements}")
 
-if pull_secret:
-    pattern = re.compile(r"^(?P<indent>[ ]*)serviceAccountName: [a-z0-9]([-a-z0-9]*[a-z0-9])?$", re.MULTILINE)
-    manifest, replacements = pattern.subn(
-        lambda match: (
+pattern = re.compile(r"^(?P<indent>[ ]*)serviceAccountName: ictsc-kocto-controller-manager$", re.MULTILINE)
+manifest, replacements = pattern.subn(
+    lambda match: (
+        (
             f"{match.group('indent')}imagePullSecrets:\n"
             f"{match.group('indent')}- name: {pull_secret}\n"
-            f"{match.group('indent')}serviceAccountName: controller-manager"
-        ),
-        manifest,
+        )
+        if pull_secret
+        else ""
     )
-    if replacements != 1:
-        raise SystemExit(f"expected one manager service account in rendered manifests, found {replacements}")
+    + f"{match.group('indent')}serviceAccountName: ictsc-kocto-controller-manager",
+    manifest,
+)
+if replacements != 1:
+    raise SystemExit(f"expected one controller manager service account, found {replacements}")
 
 sys.stdout.write(manifest)
