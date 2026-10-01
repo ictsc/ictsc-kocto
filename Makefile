@@ -116,6 +116,55 @@ build: manifests generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
+.PHONY: dev-install
+dev-install: manifests kustomize ## Install this project's CRDs into DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	"$(KUSTOMIZE)" build config/crd | "$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f -
+
+.PHONY: dev-image
+dev-image: ## Build and push a Linux image for Talos to GHCR.
+	@test -n "$(DEV_IMAGE)" || { echo "Set DEV_IMAGE to a tagged ghcr.io/ictsc/ictsc-kocto image."; exit 1; }
+	@case "$(DEV_IMAGE)" in ghcr.io/ictsc/ictsc-kocto:*) ;; *) echo "DEV_IMAGE must use ghcr.io/ictsc/ictsc-kocto."; exit 1 ;; esac
+	docker buildx build --platform="$(DEV_PLATFORM)" --push --tag="$(DEV_IMAGE)" .
+
+.PHONY: dev-pull-secret
+dev-pull-secret: ## Create a GHCR image pull Secret in DEV_CONTEXT using GHCR_TOKEN.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	@test -n "$(DEV_IMAGE_PULL_SECRET)" || { echo "Set DEV_IMAGE_PULL_SECRET to the Secret name to create."; exit 1; }
+	DEV_CONTEXT="$(DEV_CONTEXT)" DEV_IMAGE_PULL_SECRET="$(DEV_IMAGE_PULL_SECRET)" KUBECTL="$(KUBECTL)" hack/create-ghcr-pull-secret.sh
+
+.PHONY: dev-deploy
+dev-deploy: manifests kustomize ## Deploy the controller image to DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	@test -n "$(DEV_IMAGE)" || { echo "Set DEV_IMAGE to a tagged ghcr.io/ictsc/ictsc-kocto image."; exit 1; }
+	"$(KUSTOMIZE)" build config/default | python3 hack/set-dev-image.py "$(DEV_IMAGE)" "$(DEV_IMAGE_PULL_SECRET)" | "$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f -
+
+.PHONY: dev-status
+dev-status: ## Wait for the controller deployment in DEV_CONTEXT to become ready.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" rollout status deployment/ictsc-kocto-controller-manager --namespace=ictsc-kocto-system
+
+.PHONY: dev-logs
+dev-logs: ## Follow controller logs in DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" logs --follow deployment/ictsc-kocto-controller-manager --namespace=ictsc-kocto-system --container=manager
+
+.PHONY: dev-run
+dev-run: manifests generate fmt vet ## Run the controller locally against DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	DEV_CONTEXT="$(DEV_CONTEXT)" KUBECTL="$(KUBECTL)" hack/dev-with-context.sh go run ./cmd/main.go --health-probe-bind-address=127.0.0.1:8081
+
+.PHONY: dev-cleanup
+dev-cleanup: kustomize ## Delete only the sample resources from DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" delete --ignore-not-found -k config/samples
+
+.PHONY: dev-undeploy
+dev-undeploy: kustomize ## Remove samples, controller resources, and CRDs from DEV_CONTEXT.
+	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
+	"$(KUBECTL)" --context="$(DEV_CONTEXT)" delete --ignore-not-found -k config/samples
+	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context="$(DEV_CONTEXT)" delete --ignore-not-found -f -
+
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
@@ -186,6 +235,9 @@ $(LOCALBIN):
 KUBECTL ?= kubectl
 KIND ?= kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
+DEV_IMAGE ?=
+DEV_IMAGE_PULL_SECRET ?=
+DEV_PLATFORM ?= linux/amd64
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint

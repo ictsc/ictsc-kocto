@@ -47,6 +47,160 @@ kubectl apply -k config/samples/
 
 >**NOTE**: Ensure that the samples has default values to test it out.
 
+### Proxmox上のTalos開発環境
+
+`nuta1`上のVMID100を使う単一ノード環境です。Proxmox VEは9.2.20、CPUタイプは`host`、Talosは1.14.2、Kubernetesは1.36.5、KubeVirtは1.9.0です。VMID100には4 vCPU、8 GiBメモリ、32 GiBのシステムディスクを割り当てています。Kubernetesの単一ノード上でContainerDiskのVMを試す用途です。[Talos 1.14はKubernetes 1.36をサポート](https://docs.siderolabs.com/talos/v1.14/getting-started/support-matrix)し、[KubeVirt 1.9はKubernetes 1.36向け](https://github.com/kubevirt/sig-release/blob/main/releases/k8s-support-matrix.md)です。[TalosのProxmoxガイド](https://docs.siderolabs.com/talos/v1.14/platform-specific-installations/virtualized-platforms/proxmox)に従いCPUタイプを`host`にして、ホストCPU機能をゲストへ渡します。
+
+#### Talosの再構築
+
+Kubernetes 1.36系のpatchは、実行時に`https://dl.k8s.io/release/stable-1.36.txt`で確認します。今回の構成では`v1.36.5`をcontrolplane／worker両方の設定に固定しました。Talos設定とProxmox VM設定はリポジトリ外へ、権限を制限して退避してください。
+
+```sh
+export TALOS_DIR="$HOME/talos-for-ictsc-kocto-test"
+export TALOSCONFIG="$TALOS_DIR/talosconfig"
+export TALOS_NODE_IP=172.18.2.21
+export BACKUP_DIR="$HOME/ictsc-talos-backups/ictsc-kocto-test-$(date +%Y%m%d%H%M%S)"
+
+umask 077
+mkdir -p -m 700 "$BACKUP_DIR"
+cp "$TALOS_DIR/controlplane.yaml" "$TALOS_DIR/worker.yaml" "$TALOSCONFIG" "$BACKUP_DIR/"
+ssh -i "$HOME/.ssh/ictsc2026" root@172.18.2.1 'qm config 100' > "$BACKUP_DIR/qm-100.conf"
+chmod 600 "$BACKUP_DIR"/*
+```
+
+Talosの`STATE`と`EPHEMERAL`を初期化するとクラスタ状態が消えます。VMID100を停止してCPUタイプを`host`へ変更し、VMを起動した後、controlplane設定を適用してbootstrapします。
+
+```sh
+talosctl --talosconfig "$TALOSCONFIG" reset --nodes "$TALOS_NODE_IP" \
+  --system-labels-to-wipe STATE --system-labels-to-wipe EPHEMERAL \
+  --graceful=false --reboot=false --wait
+ssh -i "$HOME/.ssh/ictsc2026" root@172.18.2.1 'qm set 100 --cpu host && qm start 100'
+
+talosctl version --insecure --nodes "$TALOS_NODE_IP"
+talosctl apply-config --insecure --nodes "$TALOS_NODE_IP" --file "$TALOS_DIR/controlplane.yaml"
+talosctl --talosconfig "$TALOSCONFIG" bootstrap --nodes "$TALOS_NODE_IP"
+kubectl --context=admin@ictsc-kocto-test wait --for=condition=Ready \
+  node/test-talos-kocto-cp1 --timeout=5m
+```
+
+CPU仮想化フラグとKVMデバイスを確認します。
+
+```sh
+talosctl --talosconfig "$TALOSCONFIG" read --nodes "$TALOS_NODE_IP" /proc/cpuinfo | rg -m 1 'vmx|svm'
+talosctl --talosconfig "$TALOSCONFIG" list --nodes "$TALOS_NODE_IP" /dev | rg '^kvm$'
+```
+
+#### KubeVirtとテストVM
+
+KubeVirt v1.9.0を導入し、Availableになるまで待ちます。
+
+```sh
+export DEV_CONTEXT=admin@ictsc-kocto-test
+export KUBEVIRT_VERSION=v1.9.0
+
+kubectl --context="$DEV_CONTEXT" apply -f "https://github.com/kubevirt/kubevirt/releases/download/$KUBEVIRT_VERSION/kubevirt-operator.yaml"
+kubectl --context="$DEV_CONTEXT" apply -f "https://github.com/kubevirt/kubevirt/releases/download/$KUBEVIRT_VERSION/kubevirt-cr.yaml"
+kubectl --context="$DEV_CONTEXT" wait --for=condition=Available kubevirt/kubevirt \
+  --namespace=kubevirt --timeout=10m
+```
+
+macOS arm64用の`virtctl`を取得し、以下のテストVMマニフェストを`/tmp/kubevirt-smoke.yaml`へ保存して適用します。VMはContainerDiskとPodネットワークを使います。
+
+```sh
+mkdir -p "$HOME/.local/bin"
+gh release download v1.9.0 --repo kubevirt/kubevirt \
+  --pattern virtctl-v1.9.0-darwin-arm64 --dir "$HOME/.local/bin"
+chmod 755 "$HOME/.local/bin/virtctl-v1.9.0-darwin-arm64"
+printf '%s  %s\n' \
+  8527cf7601a6d1a2fa3e8014bacacc9e7dd1a338bc572c74d3734360a344d116 \
+  "$HOME/.local/bin/virtctl-v1.9.0-darwin-arm64" | shasum -a 256 -c -
+kubectl --context="$DEV_CONTEXT" apply -f /tmp/kubevirt-smoke.yaml
+kubectl --context="$DEV_CONTEXT" wait --for=jsonpath='{.status.phase}'=Running \
+  vmi/kubevirt-smoke --namespace=default --timeout=5m
+"$HOME/.local/bin/virtctl-v1.9.0-darwin-arm64" console kubevirt-smoke
+```
+
+シリアルコンソールは`Ctrl+]`で切断できます。
+
+```yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: kubevirt-smoke
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: kubevirt-smoke
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: containerdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources:
+          requests:
+            memory: 256Mi
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: containerdisk
+          containerDisk:
+            image: quay.io/kubevirt/cirros-container-disk-demo:latest
+```
+
+テスト後はVMを削除します。
+
+```sh
+kubectl --context="$DEV_CONTEXT" delete vm kubevirt-smoke
+```
+
+#### コントローラーのビルドとデプロイ
+
+`issue/#3`へのpushでGitHub Actionsが`linux/amd64`イメージをビルドし、`ghcr.io/ictsc/ictsc-kocto:<commit SHA>`へpushします。workflowには`packages: write`を付与し、GHCRへの書き込みには`GITHUB_TOKEN`を使います。pushしたcommit SHAを`DEV_IMAGE`に指定してデプロイします。
+
+```sh
+export DEV_CONTEXT=admin@ictsc-kocto-test
+export DEV_IMAGE="ghcr.io/ictsc/ictsc-kocto:$(git rev-parse HEAD)"
+export DEV_IMAGE_PULL_SECRET=ghcr-pull
+
+gh run list --branch 'issue/#3'
+```
+
+privateパッケージのpull Secretには`read:packages`権限のあるトークンを使います。GH CLIの認証に権限を追加し、そのトークンをSecretへ直接保存します。リポジトリやファイルにはトークンを保存しません。
+
+```sh
+gh auth refresh --hostname github.com --scopes read:packages
+export GHCR_TOKEN="$(gh auth token)"
+make dev-pull-secret DEV_CONTEXT="$DEV_CONTEXT" DEV_IMAGE_PULL_SECRET="$DEV_IMAGE_PULL_SECRET"
+unset GHCR_TOKEN
+
+make dev-deploy DEV_CONTEXT="$DEV_CONTEXT" DEV_IMAGE="$DEV_IMAGE" \
+  DEV_IMAGE_PULL_SECRET="$DEV_IMAGE_PULL_SECRET"
+make dev-status DEV_CONTEXT="$DEV_CONTEXT"
+make dev-logs DEV_CONTEXT="$DEV_CONTEXT"
+```
+
+`make dev-image DEV_IMAGE=...`はローカルから手動でamd64イメージをbuildx build／pushする場合に使えます。コントローラーをMac上で起動する場合は、`make dev-install DEV_CONTEXT="$DEV_CONTEXT"`でCRDを入れてから`make dev-run DEV_CONTEXT="$DEV_CONTEXT"`を実行します。
+
+#### ログ確認と片付け
+
+`make dev-logs`はコントローラーのログをfollowします。サンプルのProblemとProblemChallengeは`make dev-cleanup DEV_CONTEXT="$DEV_CONTEXT"`で削除できます。`make dev-undeploy DEV_CONTEXT="$DEV_CONTEXT"`はコントローラーとCRDも削除し、全てのProblemとProblemChallengeを削除します。`kubevirt-smoke`は個別に削除してください。KubeVirtを含む環境全体を撤去するときは、KubeVirt CRを削除してからReleaseのoperatorマニフェストを削除します。
+
+```sh
+kubectl --context="$DEV_CONTEXT" delete kubevirt kubevirt --namespace=kubevirt --wait=true
+kubectl --context="$DEV_CONTEXT" delete -f \
+  https://github.com/kubevirt/kubevirt/releases/download/v1.9.0/kubevirt-operator.yaml
+```
+
+Proxmox接続は`$HOME/.ssh/ictsc2026`を使います。パスワード入力が求められた場合は入力せず、接続情報を確認してください。
+
 ### To Uninstall
 **Delete the instances (CRs) from the cluster:**
 
@@ -132,4 +286,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-
