@@ -113,7 +113,7 @@ var _ = Describe("Problem Controller", func() {
 
 			readyCondition := apiMeta.FindStatusCondition(updatedProblem.Status.Conditions, "Ready")
 
-Expect(readyCondition).NotTo(BeNil())
+			Expect(readyCondition).NotTo(BeNil())
 
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCondition.Reason).To(Equal("ProvisionerNotImplemented"))

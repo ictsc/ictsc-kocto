@@ -1,0 +1,84 @@
+name: Publish and deploy development image
+
+on:
+  push:
+    branches-ignore:
+      - dev-deploy
+
+concurrency:
+  group: ictsc-kocto-dev-environment
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish-and-render:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push amd64 image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/ictsc/ictsc-kocto:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Render development manifests
+        env:
+          DEV_IMAGE: ghcr.io/ictsc/ictsc-kocto:${{ github.sha }}
+          DEV_MANIFEST: ${{ runner.temp }}/ictsc-kocto.yaml
+        run: |
+          mkdir -p "$(dirname "$DEV_MANIFEST")"
+          make manifests kustomize
+          ./bin/kustomize build config/default \
+            | python3 hack/set-dev-image.py "$DEV_IMAGE" ghcr-pull \
+            > "$DEV_MANIFEST"
+
+      - name: Publish manifests to the GitOps branch
+        env:
+          DEV_MANIFEST: ${{ runner.temp }}/ictsc-kocto.yaml
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --heads --exit-code origin dev-deploy >/dev/null; then
+            git fetch origin refs/heads/dev-deploy:refs/remotes/origin/dev-deploy
+            git switch --track --create dev-deploy origin/dev-deploy
+          else
+            git switch --orphan dev-deploy
+          fi
+
+          mkdir -p manifests
+          cp "$DEV_MANIFEST" manifests/ictsc-kocto.yaml
+          git add -- manifests/ictsc-kocto.yaml
+          if git diff --cached --quiet; then
+            echo "Rendered manifests are unchanged"
+            exit 0
+          fi
+          git commit -m "Deploy source ${GITHUB_SHA} to dev"
+          git push origin HEAD:refs/heads/dev-deploy

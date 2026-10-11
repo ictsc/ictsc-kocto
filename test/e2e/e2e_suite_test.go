@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -34,6 +36,8 @@ import (
 var (
 	// managerImage is the manager image to be built and loaded for testing.
 	managerImage = "example.com/ictsc-kocto:v0.0.1"
+	// managerManifest is rendered in a temporary directory without editing config/manager.
+	managerManifest string
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
@@ -45,6 +49,26 @@ var (
 // By default, kuberc is disabled to ensure consistent test behavior across different environments.
 // To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
 func TestE2E(t *testing.T) {
+	// Export the named Kind cluster directly rather than trusting the current context.
+	// A private kubeconfig also protects subprocesses, including CertManager setup.
+	cluster := os.Getenv("KIND_CLUSTER")
+	if !strings.HasSuffix(cluster, "-e2e") {
+		t.Fatal("Set KIND_CLUSTER to a dedicated Kind cluster name ending in -e2e")
+	}
+	kindBinary := os.Getenv("KIND")
+	if kindBinary == "" {
+		kindBinary = "kind"
+	}
+	config, err := exec.Command(kindBinary, "get", "kubeconfig", "--name", cluster).Output()
+	if err != nil {
+		t.Fatalf("Could not export kubeconfig for Kind cluster %q: %v", cluster, err)
+	}
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, config, 0o600); err != nil {
+		t.Fatalf("Could not write isolated Kind kubeconfig: %v", err)
+	}
+	t.Setenv("KUBECONFIG", kubeconfig)
+
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting ictsc-kocto e2e test suite\n")
 	RunSpecs(t, "e2e suite")
@@ -52,7 +76,7 @@ func TestE2E(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	By("building the manager image")
-	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", managerImage))
+	cmd := exec.Command("docker", "build", "-t", managerImage, ".")
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager image")
 
@@ -61,6 +85,16 @@ var _ = BeforeSuite(func() {
 	By("loading the manager image on Kind")
 	err = utils.LoadImageToKindClusterWithName(managerImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager image into Kind")
+
+	By("rendering the controller manifests without changing source files")
+	_, err = utils.Run(exec.Command("make", "manifests", "kustomize"))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to generate manifests")
+	manifest, err := utils.Run(exec.Command("./bin/kustomize", "build", "config/default"))
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to render manifests")
+	Expect(strings.Count(manifest, "image: controller:latest")).To(Equal(1))
+	manifest = strings.ReplaceAll(manifest, "image: controller:latest", "image: "+managerImage)
+	managerManifest = filepath.Join(GinkgoT().TempDir(), "manager.yaml")
+	Expect(os.WriteFile(managerManifest, []byte(manifest), 0o600)).To(Succeed())
 
 	configureKubectlKubeRC()
 	setupCertManager()
