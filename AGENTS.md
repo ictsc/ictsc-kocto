@@ -12,7 +12,7 @@ internal/webhook/*             Validation/defaulting (if present)
 config/crd/bases/*             Generated CRDs (DO NOT EDIT)
 config/rbac/role.yaml          Generated RBAC (DO NOT EDIT)
 config/samples/*               Example CRs (edit these)
-Makefile                       Build/test/deploy commands
+Makefile                       Generation/build/test commands
 PROJECT                        Kubebuilder metadata Auto-generated (DO NOT EDIT)
 ```
 
@@ -54,7 +54,7 @@ Always use `kubebuilder create api` and `kubebuilder create webhook` to scaffold
 
 ### E2E Tests Require an Isolated Kind Cluster
 The e2e tests are designed to validate the solution in an isolated environment (similar to GitHub Actions CI).
-Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster).
+Run `make test-e2e` against a disposable [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster). `KIND_CLUSTER` must end in `-e2e`; the cluster is deleted even when tests fail. The suite exports its own private Kind kubeconfig and never relies on the current context.
 
 ## After Making Changes
 
@@ -152,21 +152,23 @@ Tests use **Ginkgo + Gomega** (BDD style). Check `suite_test.go` for setup.
 
 ## Deployment Workflow
 
+This repository deploys through GitHub Actions and Argo CD. Do not add local cluster deployment targets to the Makefile.
+
 ```bash
-# 1. Regenerate manifests
+# Regenerate API artifacts
 make manifests generate
 
-# 2. Build & deploy
-export IMG=<registry>/<project>:tag
-make docker-build docker-push IMG=$IMG  # Or: kind load docker-image $IMG --name <cluster>
-make deploy IMG=$IMG
+# Push the source branch; GitHub Actions publishes the image and rendered manifests
+# Argo CD syncs the dev-deploy branch to the development cluster
 
-# 3. Test
+# Apply sample resources for development
 kubectl apply -k config/samples/
 
-# 4. Debug
-kubectl logs -n <project>-system deployment/<project>-controller-manager -c manager -f
+# Inspect controller logs
+kubectl logs -n ictsc-kocto-system deployment/ictsc-kocto-controller-manager -c manager -f
 ```
+
+The Makefile is for CRD/controller development: generation, formatting, tests, linting, local execution, and Kustomize rendering needed by CI. Deployment credentials stay in GitHub Actions or cluster Secrets.
 
 ### API Design
 
@@ -248,58 +250,9 @@ kubebuilder create api --group example --version v1alpha1 --kind MyApp \
 
 Generated code includes: status conditions (`metav1.Condition`), finalizers, owner references, events, idempotent reconciliation.
 
-## Distribution Options
+## Distribution
 
-### Option 1: YAML Bundle (Kustomize)
-
-```bash
-# Generate dist/install.yaml from Kustomize manifests
-make build-installer IMG=<registry>/<project>:tag
-```
-
-**Key points:**
-- The `dist/install.yaml` is generated from Kustomize manifests (CRDs, RBAC, Deployment)
-- Commit this file to your repository for easy distribution
-- Users only need `kubectl` to install (no additional tools required)
-
-**Example:** Users install with a single command:
-```bash
-kubectl apply -f https://raw.githubusercontent.com/<org>/<repo>/<tag>/dist/install.yaml
-```
-
-### Option 2: Helm Chart
-
-```bash
-kubebuilder edit --plugins=helm/v2-alpha                      # Generates dist/chart/ (default)
-kubebuilder edit --plugins=helm/v2-alpha --output-dir=charts  # Generates charts/chart/
-```
-
-**For development:**
-```bash
-make helm-deploy IMG=<registry>/<project>:<tag>          # Deploy manager via Helm
-make helm-deploy IMG=$IMG HELM_EXTRA_ARGS="--set ..."    # Deploy with custom values
-make helm-status                                         # Show release status
-make helm-uninstall                                      # Remove release
-make helm-history                                        # View release history
-make helm-rollback                                       # Rollback to previous version
-```
-
-**For end users/production:**
-```bash
-helm install my-release ./<output-dir>/chart/ --namespace <ns> --create-namespace
-```
-
-**Important:** If you add webhooks or modify manifests after initial chart generation:
-1. Backup any customizations in `<output-dir>/chart/values.yaml` and `<output-dir>/chart/manager/manager.yaml`
-2. Re-run: `kubebuilder edit --plugins=helm/v2-alpha --force` (use same `--output-dir` if customized)
-3. Manually restore your custom values from the backup
-
-### Publish Container Image
-
-```bash
-export IMG=<registry>/<project>:<version>
-make docker-build docker-push IMG=$IMG
-```
+Development images are published to `ghcr.io/ictsc/ictsc-kocto` by `.github/workflows/publish-dev-image.yaml`. GitHub Actions renders the Kustomize manifests with the commit image and publishes them on `dev-deploy`; Argo CD applies that branch to the development cluster. Keep deployment and image-publishing steps in this workflow rather than adding Makefile deploy targets.
 
 ## References
 

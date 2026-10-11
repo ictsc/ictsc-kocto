@@ -54,10 +54,10 @@ jobs:
           DEV_MANIFEST: ${{ runner.temp }}/ictsc-kocto.yaml
         run: |
           mkdir -p "$(dirname "$DEV_MANIFEST")"
-          make dev-render \
-            DEV_IMAGE="$DEV_IMAGE" \
-            DEV_IMAGE_PULL_SECRET=ghcr-pull \
-            DEV_MANIFEST="$DEV_MANIFEST"
+          make manifests kustomize
+          ./bin/kustomize build config/default \
+            | python3 hack/set-dev-image.py "$DEV_IMAGE" ghcr-pull \
+            > "$DEV_MANIFEST"
 
       - name: Publish manifests to the GitOps branch
         env:

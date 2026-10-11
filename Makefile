@@ -1,20 +1,5 @@
-# Image URL to use all building/pushing image targets
-IMG ?= controller:latest
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
-
-# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
-ifeq (,$(shell go env GOBIN))
-GOBIN=$(shell go env GOPATH)/bin
-else
-GOBIN=$(shell go env GOBIN)
-endif
-
-# CONTAINER_TOOL defines the container tool to be used for building images.
-# Be aware that the target commands are only tested with Docker which is
-# scaffolded by default. However, you might want to replace it to use other
-# tools. (i.e. podman)
-CONTAINER_TOOL ?= docker
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -63,36 +48,34 @@ vet: ## Run go vet against code.
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# kubectl kuberc is disabled by default for test isolation; enable with:
-# - KUBECTL_KUBERC=true
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
+# E2E tests build/load an image locally and only target a disposable Kind cluster.
+# CertManager installation can be skipped with CERT_MANAGER_INSTALL_SKIP=true.
 KIND_CLUSTER ?= ictsc-kocto-test-e2e
 
+.PHONY: check-test-e2e-cluster
+check-test-e2e-cluster:
+	@case "$(KIND_CLUSTER)" in *-e2e) ;; *) echo "KIND_CLUSTER must end in -e2e (disposable test cluster)"; exit 1 ;; esac
+
 .PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
-	@command -v $(KIND) >/dev/null 2>&1 || { \
-		echo "Kind is not installed. Please install Kind manually."; \
-		exit 1; \
-	}
-	@case "$$($(KIND) get clusters)" in \
-		*"$(KIND_CLUSTER)"*) \
-			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
-		*) \
-			echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
-			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
-	esac
+setup-test-e2e: check-test-e2e-cluster ## Set up a disposable Kind cluster without changing the current context.
+	@command -v "$(KIND)" >/dev/null 2>&1 || { echo "Install Kind before running E2E tests"; exit 1; }
+	@clusters="$$($(KIND) get clusters)"; \
+	for cluster in $$clusters; do \
+		if [ "$$cluster" = "$(KIND_CLUSTER)" ]; then echo "Kind cluster '$(KIND_CLUSTER)' already exists"; exit 0; fi; \
+	done; \
+	kubeconfig="$$(mktemp)"; \
+	trap 'rm -f "$$kubeconfig"' EXIT; \
+	$(KIND) create cluster --name "$(KIND_CLUSTER)" --kubeconfig "$$kubeconfig"
 
 .PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
+test-e2e: check-test-e2e-cluster manifests generate fmt vet ## Run E2E in disposable Kind, then delete that cluster even on test failure.
+	@trap '$(MAKE) cleanup-test-e2e' EXIT; \
+	$(MAKE) setup-test-e2e; \
+	KIND="$(KIND)" KIND_CLUSTER="$(KIND_CLUSTER)" go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout=30m
 
 .PHONY: cleanup-test-e2e
-cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
-	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+cleanup-test-e2e: check-test-e2e-cluster ## Delete only the disposable E2E Kind cluster.
+	@$(KIND) delete cluster --name "$(KIND_CLUSTER)"
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -116,139 +99,6 @@ build: manifests generate fmt vet ## Build manager binary.
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
-.PHONY: dev-install
-dev-install: manifests kustomize ## Install this project's CRDs into DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	"$(KUSTOMIZE)" build config/crd | "$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f -
-
-.PHONY: dev-render
-dev-render: manifests kustomize ## Render development manifests for the requested image.
-	@test -n "$(DEV_IMAGE)" || { echo "Set DEV_IMAGE to a tagged ghcr.io/ictsc/ictsc-kocto image."; exit 1; }
-	@test -n "$(DEV_MANIFEST)" || { echo "Set DEV_MANIFEST to the output manifest path."; exit 1; }
-	"$(KUSTOMIZE)" build config/default | python3 hack/set-dev-image.py "$(DEV_IMAGE)" "$(DEV_IMAGE_PULL_SECRET)" > "$(DEV_MANIFEST)"
-
-.PHONY: dev-image
-dev-image: ## Build and push a Linux image for Talos to GHCR.
-	@test -n "$(DEV_IMAGE)" || { echo "Set DEV_IMAGE to a tagged ghcr.io/ictsc/ictsc-kocto image."; exit 1; }
-	@case "$(DEV_IMAGE)" in ghcr.io/ictsc/ictsc-kocto:*) ;; *) echo "DEV_IMAGE must use ghcr.io/ictsc/ictsc-kocto."; exit 1 ;; esac
-	docker buildx build --platform="$(DEV_PLATFORM)" --push --tag="$(DEV_IMAGE)" .
-
-.PHONY: dev-pull-secret
-dev-pull-secret: ## Create a GHCR image pull Secret in DEV_CONTEXT using GHCR_TOKEN.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	@test -n "$(DEV_IMAGE_PULL_SECRET)" || { echo "Set DEV_IMAGE_PULL_SECRET to the Secret name to create."; exit 1; }
-	DEV_CONTEXT="$(DEV_CONTEXT)" DEV_IMAGE_PULL_SECRET="$(DEV_IMAGE_PULL_SECRET)" KUBECTL="$(KUBECTL)" hack/create-ghcr-pull-secret.sh
-
-.PHONY: dev-argocd-install
-dev-argocd-install: ## Install the pinned Argo CD version into DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" create namespace argocd --dry-run=client -o yaml | "$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f -
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" apply --server-side --force-conflicts --namespace=argocd -f "https://raw.githubusercontent.com/argoproj/argo-cd/$(ARGOCD_VERSION)/manifests/install.yaml"
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" wait --for=condition=Established crd/applications.argoproj.io --timeout=5m
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" rollout status deployment/argocd-server --namespace=argocd --timeout=5m
-
-.PHONY: dev-argocd-repo
-dev-argocd-repo: ## Configure Argo CD to read this private GitHub repository.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	@test -n "$(ARGOCD_REPO_SSH_KEY)" || { echo "Set ARGOCD_REPO_SSH_KEY to the read-only GitHub deploy key path."; exit 1; }
-	DEV_CONTEXT="$(DEV_CONTEXT)" ARGOCD_REPO_SSH_KEY="$(ARGOCD_REPO_SSH_KEY)" KUBECTL="$(KUBECTL)" hack/configure-argocd-repo.sh
-
-.PHONY: dev-argocd-apply
-dev-argocd-apply: ## Configure Argo CD to sync the GitOps branch to DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f config/argocd/ictsc-kocto-dev.yaml
-
-.PHONY: dev-deploy
-dev-deploy: manifests kustomize ## Deploy the controller image to DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	@test -n "$(DEV_IMAGE)" || { echo "Set DEV_IMAGE to a tagged ghcr.io/ictsc/ictsc-kocto image."; exit 1; }
-	"$(KUSTOMIZE)" build config/default | python3 hack/set-dev-image.py "$(DEV_IMAGE)" "$(DEV_IMAGE_PULL_SECRET)" | "$(KUBECTL)" --context="$(DEV_CONTEXT)" apply -f -
-
-.PHONY: dev-status
-dev-status: ## Wait for the controller deployment in DEV_CONTEXT to become ready.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" rollout status deployment/ictsc-kocto-controller-manager --namespace=ictsc-kocto-system
-
-.PHONY: dev-logs
-dev-logs: ## Follow controller logs in DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" logs --follow deployment/ictsc-kocto-controller-manager --namespace=ictsc-kocto-system --container=manager
-
-.PHONY: dev-run
-dev-run: manifests generate fmt vet ## Run the controller locally against DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	DEV_CONTEXT="$(DEV_CONTEXT)" KUBECTL="$(KUBECTL)" hack/dev-with-context.sh go run ./cmd/main.go --health-probe-bind-address=127.0.0.1:8081
-
-.PHONY: dev-cleanup
-dev-cleanup: kustomize ## Delete only the sample resources from DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" delete --ignore-not-found -k config/samples
-
-.PHONY: dev-undeploy
-dev-undeploy: kustomize ## Remove samples, controller resources, and CRDs from DEV_CONTEXT.
-	@test -n "$(DEV_CONTEXT)" || { echo "Set DEV_CONTEXT to the kubeconfig context to use."; exit 1; }
-	"$(KUBECTL)" --context="$(DEV_CONTEXT)" delete --ignore-not-found -k config/samples
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" --context="$(DEV_CONTEXT)" delete --ignore-not-found -f -
-
-# If you wish to build the manager image targeting other platforms you can use the --platform flag.
-# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
-# More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-.PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
-
-.PHONY: docker-push
-docker-push: ## Push docker image with the manager.
-	$(CONTAINER_TOOL) push ${IMG}
-
-# PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
-# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
-# - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
-# - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
-# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
-.PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name ictsc-kocto-builder
-	$(CONTAINER_TOOL) buildx use ictsc-kocto-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm ictsc-kocto-builder
-	rm Dockerfile.cross
-
-.PHONY: build-installer
-build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
-	mkdir -p dist
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default > dist/install.yaml
-
-##@ Deployment
-
-ifndef ignore-not-found
-  ignore-not-found = false
-endif
-
-.PHONY: install
-install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
-
-.PHONY: uninstall
-uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
-
-.PHONY: deploy
-deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
-
-.PHONY: undeploy
-undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
-
 ##@ Dependencies
 
 ## Location to install dependencies to
@@ -257,15 +107,8 @@ $(LOCALBIN):
 	mkdir -p "$(LOCALBIN)"
 
 ## Tool Binaries
-KUBECTL ?= kubectl
 KIND ?= kind
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
-DEV_IMAGE ?=
-DEV_IMAGE_PULL_SECRET ?=
-DEV_PLATFORM ?= linux/amd64
-DEV_MANIFEST ?=
-ARGOCD_VERSION ?= v3.5.3
-ARGOCD_REPO_SSH_KEY ?=
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
