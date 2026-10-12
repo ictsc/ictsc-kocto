@@ -139,6 +139,20 @@ type ChallengeSnapshotReference struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:MinLength=1
 	UID types.UID `json:"uid"`
+
+	// ContentRefは、保存したVM構成とディスク一覧を持つVirtualMachineSnapshotContentを示す。
+	// 削除途中でcontrollerが再起動しても、同じ子リソースの片付けを続けるために記録する。
+	// +optional
+	ContentRef *TeamResourceReference `json:"contentRef,omitempty"`
+
+	// VolumeSnapshotRefは、rootディスクのCSI VolumeSnapshotを示す。同じnamespaceにある。
+	// +optional
+	VolumeSnapshotRef *TeamResourceReference `json:"volumeSnapshotRef,omitempty"`
+
+	// VolumeSnapshotContentRefは、rootディスクのCSI VolumeSnapshotContentを示す。
+	// このリソースはクラスタ全体に属するため、namespaceを指定せずに参照する。
+	// +optional
+	VolumeSnapshotContentRef *TeamResourceReference `json:"volumeSnapshotContentRef,omitempty"`
 }
 
 // ProblemChallengeTeamStatusは、各チームの問題環境の状態を表します。

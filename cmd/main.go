@@ -25,10 +25,13 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	csiv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clonev1 "kubevirt.io/api/clone/v1beta1"
 	virtv1 "kubevirt.io/api/core/v1"
+	snapshotv1 "kubevirt.io/api/snapshot/v1beta1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -55,6 +58,9 @@ func init() {
 	utilruntime.Must(labv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(virtv1.AddToScheme(scheme))
 	utilruntime.Must(cdiv1.AddToScheme(scheme))
+	utilruntime.Must(clonev1.AddToScheme(scheme))
+	utilruntime.Must(snapshotv1.AddToScheme(scheme))
+	utilruntime.Must(csiv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -200,8 +206,9 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.ProblemChallengeReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+		Scheme:    mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "problemchallenge")
 		os.Exit(1)

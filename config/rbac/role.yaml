@@ -7,24 +7,37 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumeclaims
-  verbs:
-  - delete
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
+  - nodes
   - pods
   verbs:
   - get
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - cdi.kubevirt.io
   resources:
   - datavolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - clone.kubevirt.io
+  resources:
+  - virtualmachineclones
   verbs:
   - create
   - delete
@@ -55,10 +68,7 @@ rules:
   - lab.icttoracon.net
   resources:
   - problemchallenges
-  - problems
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -79,4 +89,52 @@ rules:
   verbs:
   - get
   - patch
+  - update
+- apiGroups:
+  - lab.icttoracon.net
+  resources:
+  - problems
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - snapshot.kubevirt.io
+  resources:
+  - virtualmachinerestores
+  - virtualmachinesnapshotcontents
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - snapshot.kubevirt.io
+  resources:
+  - virtualmachinesnapshots
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshotcontents
+  - volumesnapshots
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - subresources.kubevirt.io
+  resources:
+  - virtualmachines/start
+  verbs:
   - update

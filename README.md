@@ -33,17 +33,37 @@ make run STORAGE_CLASS=<用意したStorageClassの名前>
 
 サンプルは公開されているCirrosのコンテナディスクをdigestで固定し、1CPU、128MiB、1GiBのrootディスクにしています。sourceとaccessは保持していますが、現在のcontrollerはGit取得、Ansible、ネットワーク構築を実行しません。ゲストNICを接続せず、cloud-initも生成しないため、確認にはシリアルコンソールを使います。ReadyはKubeVirtのVM準備状態であり、ゲスト内の問題構築完了を意味しません。
 
-Problemのロック中は作問VMを停止します。VMIとlauncher Podの消失を確認してからQuiescedを記録します。停止待ちは5分でタイムアウトを表示し、ロックを維持します。KubeVirt側は300秒のgrace period後に強制終了する場合があるため、アプリケーションの整合性は保証しません。Challengeによるロック取得とSnapshot/Cloneの処理は、後続の実装段階です。
+Problemのロック中は作問VMを停止します。VMIとlauncher Podの消失を確認してからQuiescedを記録します。停止待ちは5分でタイムアウトを表示し、ロックを維持します。KubeVirt側は300秒のgrace period後に強制終了する場合があるため、アプリケーションの整合性は保証しません。Challenge controllerは、排他的なロック取得、停止確認、rootディスクを含むSnapshotの保存、チームごとのCloneと初回起動を行います。
 
 作問VMはHA対象とし、未ロック時はKubeVirtの`Always`で稼働を維持します。VMが削除された場合も同じPVCで再作成します。ロック中は障害から復旧しても停止状態を維持し、ディスクを失った場合は初期イメージで代用しません。別ノードへの復旧には、複数ノードと冗長化したAPI/controller、および障害ノード以外から同じディスクとスナップショットを利用できるCSI基盤が必要です。現在の単一ノードと`kocto-hostpath`の構成では、ノード障害からのHA復旧はできません。
 
-競技用VMは公平性のためHA対象にしません。Challenge controllerの後続実装では、初回展開後に障害やVMの消失が起きても自動再起動、別ノードへの移動、自動再複製は行わず、障害を報告します。controller自体が復旧しても、この方針は変えません。展開済みの競技用VMの維持は、作問VMの稼働状態から切り離します。
+競技用VMは公平性のためHA対象にしません。Challenge controllerは、初回展開後に障害やVMの消失が起きても自動再起動、別ノードへの移動、自動再複製は行わず、障害を報告します。controller自体が復旧しても、この方針は変えません。展開済みの競技用VMの維持は、作問VMの稼働状態から切り離します。
 
 利用者にはProblem/ProblemChallengeと必要なコンソール権限を与え、管理VMのspec、start/stop、PVC、親CRのstatusを直接操作する権限は与えません。Haltedだけではvirtctl startを防げません。cluster-adminによる操作やfinalizerの強制除去は、この保護の対象外です。
 
 テスト用のKubeVirt/CDI CRDは`test/fixtures/crds`に版を固定して置いています。envtestではAPIの動作を検証し、Kind E2EではCRDだけを導入してmanagerとmetricsを確認します。いずれも実際のVMやディスク取り込みの成功を検証するものではありません。
 
 基盤の導入手順は[検証クラスタの永続ディスク](config/dev-storage/README.md)を参照してください。
+
+### チームVMの展開
+
+作問VMのディスクへ必要な変更を加えてから、同じnamespaceにProblemChallengeを作成します。`problemRef.name`に作問元、`placement.nodeSelector`に競技VMの配置条件、`teams`にチームIDを指定します。1つのProblemを同時に使えるChallengeは1つです。競合したChallengeは`Accepted=False / ProblemLocked`になり、先のChallengeが削除されても自動では展開しません。削除して作り直すことで再試行します。
+
+```sh
+# サンプルは2つのProblemを参照します。先に各作問VMの準備を済ませてください。
+kubectl --context=admin@ictsc-kocto-test apply -n default \
+  -f config/samples/lab_v1alpha1_problemchallenge.yaml
+kubectl --context=admin@ictsc-kocto-test wait -n default \
+  problemchallenge/problemchallenge-sample --for=condition=Ready --timeout=10m
+kubectl --context=admin@ictsc-kocto-test get problemchallenge problemchallenge-sample \
+  -n default -o yaml
+```
+
+`status.snapshotRef`に保存結果とCSI側の参照、`status.teams`に各チームのClone、VM、PVCの参照を表示します。全チームのVMが準備できると`Ready=True`になります。保存されるのは停止後のディスクとVM構成で、RAMや実行中プロセスは保存しません。各チームは同じSnapshotから独立したPVCを復元して使います。
+
+チームVMは`Manual`で作成し、CloneとPVCの準備を確認してから、controllerが初回だけstart APIを呼びます。最初のVMIのUIDも記録するため、競技中にVMIが消えても別のVMIを自動起動しません。初回要求の送信前に記録した直後にcontrollerが停止するなど、要求の結果を確認できない場合は`StartUnconfirmed`として報告し、自動で再送しません。こうした失敗もChallengeの削除と再作成で再試行します。
+
+Challengeを削除すると、Cloneと内部Restoreを止めてからチームVM、PVC、Snapshotを片付けます。CSI側のSnapshotContentが削除されるまで待ち、最後に自分が持つProblemのロックだけを解除します。失敗中も削除による片付けができます。元の作問ディスクは保持し、ロック解除後に作問VMが再起動します。
 
 ### 依存関係の更新とPRの検証
 

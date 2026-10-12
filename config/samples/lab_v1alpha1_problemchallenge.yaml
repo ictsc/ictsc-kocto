@@ -11,7 +11,7 @@ spec:
   placement:
     # 対象のKubernetes Nodeだけに付いているラベルを指定します。
     nodeSelector:
-      lab.icttoracon.net/kubevirt-node: "worker-01"
+      kubernetes.io/hostname: "test-talos-kocto-cp1"
   teams:
     - id: "team-001"
     - id: "team-002"
@@ -29,7 +29,7 @@ spec:
   placement:
     # 対象のKubernetes Nodeだけに付いているラベルを指定します。
     nodeSelector:
-      lab.icttoracon.net/kubevirt-node: "worker-01"
+      kubernetes.io/hostname: "test-talos-kocto-cp1"
   teams:
     - id: "team-001"
     - id: "team-002"

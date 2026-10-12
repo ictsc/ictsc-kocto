@@ -23,9 +23,15 @@ import (
 func main() {
  dest := "test/fixtures/crds"
  if err := os.MkdirAll(dest,0755); err != nil { panic(err) }
- for _, kind := range []string{"virtualmachines","virtualmachineinstances"} {
+ for _, kind := range []string{"virtualmachines","virtualmachineinstances","virtualmachinesnapshots","virtualmachinesnapshotcontents","virtualmachinerestores","virtualmachineclones"} {
   crd, err := NewVirtualMachineCrd()
-  if kind == "virtualmachineinstances" { crd, err = NewVirtualMachineInstanceCrd() }
+  switch kind {
+  case "virtualmachineinstances": crd, err = NewVirtualMachineInstanceCrd()
+  case "virtualmachinesnapshots": crd, err = NewVirtualMachineSnapshotCrd()
+  case "virtualmachinesnapshotcontents": crd, err = NewVirtualMachineSnapshotContentCrd()
+  case "virtualmachinerestores": crd, err = NewVirtualMachineRestoreCrd()
+  case "virtualmachineclones": crd, err = NewVirtualMachineCloneCrd()
+  }
   if err != nil { panic(err) }
   data, err := yaml.Marshal(crd); if err != nil { panic(err) }
   prefix := []byte("# Generated from kubevirt/kubevirt v1.9.0 official CRD definitions\n")
@@ -49,6 +55,11 @@ def main():
             (directory / name).write_text(source)
         (directory / "main.go").write_text(MAIN)
         subprocess.run(["go", "run", *map(str, sorted(directory.glob("*.go")))], cwd=ROOT, check=True)
+        for kind in ("volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"):
+            url = f"https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/v8.6.0/client/config/crd/snapshot.storage.k8s.io_{kind}.yaml"
+            with urllib.request.urlopen(url, timeout=60) as response:
+                data = response.read()
+            (ROOT / "test/fixtures/crds" / f"{kind}.yaml").write_bytes(b"# Source: kubernetes-csi/external-snapshotter v8.6.0\n" + data)
 
 
 if __name__ == "__main__":

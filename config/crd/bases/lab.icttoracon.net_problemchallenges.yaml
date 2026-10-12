@@ -167,6 +167,23 @@ spec:
               snapshotRef:
                 description: SnapshotRefは、出題元のProblemのスナップショットを示します。
                 properties:
+                  contentRef:
+                    description: |-
+                      ContentRefは、保存したVM構成とディスク一覧を持つVirtualMachineSnapshotContentを示す。
+                      削除途中でcontrollerが再起動しても、同じ子リソースの片付けを続けるために記録する。
+                    properties:
+                      name:
+                        description: Nameは、参照するリソースの名前を記録します。
+                        minLength: 1
+                        type: string
+                      uid:
+                        description: UIDは、参照するリソースのUIDを記録します。
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - uid
+                    type: object
                   name:
                     description: Nameは、参照するスナップショットの名前を指定します。
                     minLength: 1
@@ -175,6 +192,38 @@ spec:
                     description: UIDは、参照するスナップショットのUIDを指定します。
                     minLength: 1
                     type: string
+                  volumeSnapshotContentRef:
+                    description: |-
+                      VolumeSnapshotContentRefは、rootディスクのCSI VolumeSnapshotContentを示す。
+                      このリソースはクラスタ全体に属するため、namespaceを指定せずに参照する。
+                    properties:
+                      name:
+                        description: Nameは、参照するリソースの名前を記録します。
+                        minLength: 1
+                        type: string
+                      uid:
+                        description: UIDは、参照するリソースのUIDを記録します。
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - uid
+                    type: object
+                  volumeSnapshotRef:
+                    description: VolumeSnapshotRefは、rootディスクのCSI VolumeSnapshotを示す。同じnamespaceにある。
+                    properties:
+                      name:
+                        description: Nameは、参照するリソースの名前を記録します。
+                        minLength: 1
+                        type: string
+                      uid:
+                        description: UIDは、参照するリソースのUIDを記録します。
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - uid
+                    type: object
                 required:
                 - name
                 - uid

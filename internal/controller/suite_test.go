@@ -25,9 +25,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	csiv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	clonev1 "kubevirt.io/api/clone/v1beta1"
 	virtv1 "kubevirt.io/api/core/v1"
+	snapshotv1 "kubevirt.io/api/snapshot/v1beta1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -65,6 +68,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(virtv1.AddToScheme(scheme.Scheme)).To(Succeed())
 	Expect(cdiv1.AddToScheme(scheme.Scheme)).To(Succeed())
+	Expect(clonev1.AddToScheme(scheme.Scheme)).To(Succeed())
+	Expect(snapshotv1.AddToScheme(scheme.Scheme)).To(Succeed())
+	Expect(csiv1.AddToScheme(scheme.Scheme)).To(Succeed())
 
 	// +kubebuilder:scaffold:scheme
 
