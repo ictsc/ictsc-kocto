@@ -45,7 +45,7 @@ type ProblemReconciler struct {
 // TODO: Problemのmachine設定とimageを基に、KubeVirt上へ検証用VMを用意します。
 //
 // ReconcileとResultの詳細は次を参照してください。
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.2/pkg/reconcile
 func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	problem := &labv1alpha1.Problem{}
 	if err := r.Get(ctx, req.NamespacedName, problem); err != nil {
