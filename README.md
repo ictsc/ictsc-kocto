@@ -25,7 +25,7 @@ DependabotとRenovateが作成したbranchのpushでは、このdeploy用workflo
 
 Problem controllerは、初回だけCDIのDataVolumeでcontainerDiskの内容をPVCへ取り込み、そのPVCからKubeVirt VMを起動します。VMの再作成やCPU/memoryの変更でも同じPVCを使います。取り込み済みのディスクを失った場合は、作問データを守るため自動で再取り込みしません。
 
-起動にはKubeVirt v1.9.0、CDI、Filesystem/RWOに対応するImmediate bindingのStorageClassが必要です。基盤の導入は別途行います。`config/manager/manager.yaml`の`--storage-class=`に、基盤で用意したStorageClassの名前を指定してください。空のままではmanagerは起動しません。手元で起動するときは次のように指定します。
+起動にはKubeVirt v1.9.0、CDI、Filesystem/RWOに対応するImmediate bindingのStorageClassが必要です。検証クラスタでは以下の手順で導入する`kocto-hostpath`を`config/manager/manager.yaml`に指定しています。別の環境では`--storage-class`を変更してください。空の値ではmanagerは起動しません。手元で起動するときは次のように指定します。
 
 ```sh
 make run STORAGE_CLASS=<用意したStorageClassの名前>
@@ -38,6 +38,8 @@ Problemのロック中は作問VMを停止します。VMIとlauncher Podの消�
 利用者にはProblem/ProblemChallengeと必要なコンソール権限を与え、管理VMのspec、start/stop、PVC、親CRのstatusを直接操作する権限は与えません。Haltedだけではvirtctl startを防げません。cluster-adminによる操作やfinalizerの強制除去は、この保護の対象外です。
 
 テスト用のKubeVirt/CDI CRDは`test/fixtures/crds`に版を固定して置いています。envtestではAPIの動作を検証し、Kind E2EではCRDだけを導入してmanagerとmetricsを確認します。いずれも実際のVMやディスク取り込みの成功を検証するものではありません。
+
+基盤の導入手順は[検証クラスタの永続ディスク](config/dev-storage/README.md)を参照してください。
 
 ### 依存関係の更新とPRの検証
 

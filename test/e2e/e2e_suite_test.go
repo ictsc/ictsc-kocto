@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -95,7 +96,7 @@ var _ = BeforeSuite(func() {
 	manifest = strings.ReplaceAll(manifest, "image: controller:latest", "image: "+managerImage)
 	// No VMs are provisioned in Kind. Supply a placeholder class only for manager startup.
 	Expect(strings.Count(manifest, "--storage-class=")).To(Equal(1))
-	manifest = strings.ReplaceAll(manifest, "--storage-class=", "--storage-class=e2e-unused")
+	manifest = regexp.MustCompile(`--storage-class=[^\s]*`).ReplaceAllString(manifest, "--storage-class=e2e-unused")
 	managerManifest = filepath.Join(GinkgoT().TempDir(), "manager.yaml")
 	Expect(os.WriteFile(managerManifest, []byte(manifest), 0o600)).To(Succeed())
 
