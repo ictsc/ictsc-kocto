@@ -674,6 +674,53 @@ metadata:
   name: ictsc-kocto-manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cdi.kubevirt.io
+  resources:
+  - datavolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachineinstances
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kubevirt.io
+  resources:
+  - virtualmachines
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - lab.icttoracon.net
   resources:
   - problemchallenges
@@ -966,9 +1013,10 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
+        - --storage-class=kocto-hostpath
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:a5df870d2737094f640122a5595f3f3182114cad
+        image: ghcr.io/ictsc/ictsc-kocto:2f64308ea5e06836b878f7f63a4216898376ce8a
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
