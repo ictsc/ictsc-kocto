@@ -19,12 +19,15 @@ package v1alpha1
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // このファイルを編集してProblemChallengeのAPIを定義します。
 // フィールドを追加するときは、JSONに変換できるようJSONタグも指定してください。
 
 // ProblemChallengeSpecは、ある出題機会に問題環境を展開する設定を表します。
+// 作成後は変更できません。
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProblemChallenge spec is immutable"
 type ProblemChallengeSpec struct {
 	// ProblemRefは、出題するProblemの名前を指定します。
 	// ProblemChallengeと同じnamespaceにあるProblemを参照します。
@@ -90,6 +93,92 @@ type ProblemChallengeStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// SourceProblemは、出題元のProblemを示します
+	// +optional
+	SourceProblem *SourceProblemReference `json:"sourceProblem,omitempty"`
+
+	// SnapshotRefは、出題元のProblemのスナップショットを示します。
+	// +optional
+	SnapshotRef *ChallengeSnapshotReference `json:"snapshotRef,omitempty"`
+
+	// Teamsは、各チームの問題環境の状態を表します。
+	// +listType=map
+	// +listMapKey=id
+	// +optional
+	Teams []ProblemChallengeTeamStatus `json:"teams,omitempty"`
+}
+
+// SourceProblemReferenceは、出題元のProblemへの参照を表します。
+type SourceProblemReference struct {
+	// Nameは、参照するProblemの名前を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Name string `json:"name"`
+
+	// UIDは、参照するProblemのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+
+	// Generationは、ロック取得時のProblemのgenerationを記録します。
+	// +required
+	Generation int64 `json:"generation"`
+}
+
+// ChallengeSnapshotReferenceは、出題元のProblemのスナップショットへの参照を表します。
+type ChallengeSnapshotReference struct {
+	// Nameは、参照するスナップショットの名前を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Name string `json:"name"`
+
+	// UIDは、参照するスナップショットのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+}
+
+// ProblemChallengeTeamStatusは、各チームの問題環境の状態を表します。
+type ProblemChallengeTeamStatus struct {
+	// IDは、チームの識別子を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	ID string `json:"id"`
+
+	// CloneRefは、チーム用のVirtualMachineCloneへの参照を示します。
+	// +optional
+	CloneRef *TeamResourceReference `json:"cloneRef,omitempty"`
+
+	// VMRefは、復元したチームVMへの参照を示します。
+	// +optional
+	VMRef *TeamResourceReference `json:"vmRef,omitempty"`
+
+	// PVCRefは、復元したチームのroot PVCへの参照を示します。
+	// +optional
+	PVCRef *TeamResourceReference `json:"pvcRef,omitempty"`
+
+	// Conditionsは、チームの問題環境の状態を種類ごとに表します。
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// TeamResourceReferenceは、チーム環境を構成するリソースへの参照を表します。
+type TeamResourceReference struct {
+	// Nameは、参照するリソースの名前を記録します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Name string `json:"name"`
+
+	// UIDは、参照するリソースのUIDを記録します。
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	UID types.UID `json:"uid"`
 }
 
 // +kubebuilder:object:root=true

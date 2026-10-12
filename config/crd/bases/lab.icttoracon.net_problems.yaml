@@ -74,11 +74,21 @@ spec:
                     anyOf:
                     - type: integer
                     - type: string
-                    description: Diskはマシンのディスク容量を指定する
+                    description: |-
+                      Diskは初回取り込み時のroot PVCの要求容量を指定する。
+                      作成後は変更できない。
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: machine.disk must be a valid quantity greater than
+                        zero
+                      rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                    - message: machine.disk is immutable
+                      rule: self == oldSelf
                   image:
-                    description: Imageは、VMの起動元となるイメージを指定する
+                    description: |-
+                      Imageは、初回取り込み元のイメージを指定する。
+                      作成後は変更できない。
                     properties:
                       containerDisk:
                         description: ContainerDiskは、VMの起動元として使うコンテナディスクイメージを指定する
@@ -87,6 +97,9 @@ spec:
                     required:
                     - containerDisk
                     type: object
+                    x-kubernetes-validations:
+                    - message: machine.image is immutable
+                      rule: self == oldSelf
                   memory:
                     anyOf:
                     - type: integer
@@ -94,6 +107,10 @@ spec:
                     description: Memoryはマシンのメモリ容量を指定する
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: machine.memory must be a valid quantity greater than
+                        zero
+                      rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
                 required:
                 - cpu
                 - disk
@@ -137,6 +154,26 @@ spec:
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。
             properties:
+              activeChallenge:
+                description: ActiveChallengeは、ロックを所有するChallengeの情報を記録します。
+                properties:
+                  activeChallengeName:
+                    description: ActiveChallengeNameは、ロックを所有するChallengeの情報を示します。
+                    minLength: 1
+                    type: string
+                  problemGeneration:
+                    description: ProblemGenerationは、ロック取得時のProblemの世代を指定します。
+                    format: int64
+                    type: integer
+                  uid:
+                    description: UIDは、現在アクティブなChallengeのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - activeChallengeName
+                - problemGeneration
+                - uid
+                type: object
               conditions:
                 description: |-
                   Conditionsは、Problemの現在の状態を表します。
@@ -199,10 +236,44 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              diskRef:
+                description: DiskRefは、初回取り込みを管理するDataVolumeの名前とUIDを記録します。
+                properties:
+                  diskName:
+                    description: Nameは、初回取り込みを管理するDataVolumeの名前を指定します。
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UIDは、初回取り込みを管理するDataVolumeのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - diskName
+                - uid
+                type: object
+              vmRef:
+                description: VMRefは、管理する作問VMの名前とUIDを記録します。
+                properties:
+                  uid:
+                    description: UIDは、管理する作問VMのUIDを指定します。
+                    minLength: 1
+                    type: string
+                  vmName:
+                    description: Nameは、管理する作問VMの名前を指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - uid
+                - vmName
+                type: object
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: Problem spec cannot change while locked by a Challenge
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec
+            == oldSelf.spec'
     served: true
     storage: true
     subresources:

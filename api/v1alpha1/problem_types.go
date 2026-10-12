@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Problem APIで使う型を定義します。
@@ -80,14 +81,20 @@ type ProblemMachineSpec struct {
 	CPU int32 `json:"cpu"`
 
 	// Memoryはマシンのメモリ容量を指定する
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.memory must be a valid quantity greater than zero"
 	// +required
 	Memory resource.Quantity `json:"memory"`
 
-	// Diskはマシンのディスク容量を指定する
+	// Diskは初回取り込み時のroot PVCの要求容量を指定する。
+	// 作成後は変更できない。
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.disk must be a valid quantity greater than zero"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.disk is immutable"
 	// +required
 	Disk resource.Quantity `json:"disk"`
 
-	// Imageは、VMの起動元となるイメージを指定する
+	// Imageは、初回取り込み元のイメージを指定する。
+	// 作成後は変更できない。
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.image is immutable"
 	// +required
 	Image ProblemMachineImageSpec `json:"image"`
 }
@@ -126,10 +133,65 @@ type ProblemStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// VMRefは、管理する作問VMの名前とUIDを記録します。
+	// +optional
+	VMRef *ProblemVMReference `json:"vmRef,omitempty"`
+
+	// DiskRefは、初回取り込みを管理するDataVolumeの名前とUIDを記録します。
+	// +optional
+	DiskRef *ProblemDiskReference `json:"diskRef,omitempty"`
+
+	// ActiveChallengeは、ロックを所有するChallengeの情報を記録します。
+	// +optional
+	ActiveChallenge *ActiveChallengeStatus `json:"activeChallenge,omitempty"`
+}
+
+type ProblemVMReference struct {
+	// Nameは、管理する作問VMの名前を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	VMName string `json:"vmName"`
+
+	// UIDは、管理する作問VMのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+}
+
+type ProblemDiskReference struct {
+	// Nameは、初回取り込みを管理するDataVolumeの名前を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	DiskName string `json:"diskName"`
+
+	// UIDは、初回取り込みを管理するDataVolumeのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+}
+type ActiveChallengeStatus struct {
+	// ActiveChallengeNameは、ロックを所有するChallengeの情報を示します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	ActiveChallengeName string `json:"activeChallengeName"`
+
+	// UIDは、現在アクティブなChallengeのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+
+	// ProblemGenerationは、ロック取得時のProblemの世代を指定します。
+	// +required
+	ProblemGeneration int64 `json:"problemGeneration"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec == oldSelf.spec",message="Problem spec cannot change while locked by a Challenge"
 
 // Problemは問題環境を表すリソースです。
 type Problem struct {
