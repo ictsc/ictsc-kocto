@@ -1,0 +1,398 @@
+--- a/pkg/hostpath/hostpath.go
++++ b/pkg/hostpath/hostpath.go
+@@ -117,6 +117,9 @@
+ 		return nil, fmt.Errorf("failed to create dataRoot: %v", err)
+ 	}
+ 
++	if err := removePartialReflinks(cfg.StateDir); err != nil {
++		return nil, fmt.Errorf("could not clean partial reflink copies: %w", err)
++	}
+ 	klog.Infof("Driver: %v ", cfg.DriverName)
+ 	klog.Infof("Version: %s", cfg.VendorVersion)
+ 
+@@ -314,7 +317,7 @@
+ 	var cmd []string
+ 	switch mode {
+ 	case state.MountAccess:
+-		cmd = []string{"tar", "zxvf", snapshotPath, "-C", destPath}
++		return reflinkDirectory(snapshotPath, destPath)
+ 	case state.BlockAccess:
+ 		cmd = []string{"dd", "if=" + snapshotPath, "of=" + destPath}
+ 	default:
+@@ -354,23 +357,9 @@
+ 	}
+ }
+ 
++// Filesystemの直接クローンにも同じreflinkの制約を適用する。
+ func loadFromFilesystemVolume(hostPathVolume state.Volume, destPath string) error {
+-	srcPath := hostPathVolume.VolPath
+-	isEmpty, err := hostPathIsEmpty(srcPath)
+-	if err != nil {
+-		return fmt.Errorf("failed verification check of source hostpath volume %v: %w", hostPathVolume.VolID, err)
+-	}
+-
+-	// If the source hostpath volume is empty it's a noop and we just move along, otherwise the cp call will fail with a a file stat error DNE
+-	if !isEmpty {
+-		args := []string{"-a", srcPath + "/.", destPath + "/"}
+-		executor := utilexec.New()
+-		out, err := executor.Command("cp", args...).CombinedOutput()
+-		if err != nil {
+-			return fmt.Errorf("failed pre-populate data from volume %v: %s: %w", hostPathVolume.VolID, out, err)
+-		}
+-	}
+-	return nil
++	return reflinkDirectory(hostPathVolume.VolPath, destPath)
+ }
+ 
+ func loadFromBlockVolume(hostPathVolume state.Volume, destPath string) error {
+@@ -394,28 +383,18 @@
+ 	return count
+ }
+ 
++// Filesystem Snapshotはtarではなくreflinkのディレクトリとして保存する。
++// Raw Blockはこの検証用StorageClassでは利用しないため、上流の処理を維持する。
+ func (hp *hostPath) createSnapshotFromVolume(vol state.Volume, file string, opts ...string) error {
+-	var args []string
+-	var cmdName string
+-	if vol.VolAccessType == state.BlockAccess {
+-		klog.V(4).Infof("Creating snapshot of Raw Block Mode Volume")
+-		cmdName = "cp"
+-		args = []string{vol.VolPath, file}
+-	} else {
+-		klog.V(4).Infof("Creating snapshot of Filesystem Mode Volume")
+-		cmdName = "tar"
+-		opts = append(
+-			[]string{"czf", file, "-C", vol.VolPath},
+-			opts...,
+-		)
+-		args = []string{"."}
+-	}
+-	executor := utilexec.New()
+-	optsAndArgs := append(opts, args...)
+-	out, err := executor.Command(cmdName, optsAndArgs...).CombinedOutput()
+-	if err != nil {
+-		return fmt.Errorf("failed create snapshot: %w: %s", err, out)
+-	}
+-
++	if vol.VolAccessType == state.MountAccess {
++		if len(opts) != 0 {
++			return status.Error(codes.InvalidArgument, "tar options are not supported for reflink snapshots")
++		}
++		return reflinkDirectory(vol.VolPath, file)
++	}
++	output, err := utilexec.New().Command("cp", vol.VolPath, file).CombinedOutput()
++	if err != nil {
++		return fmt.Errorf("failed create block snapshot: %w: %s", err, output)
++	}
+ 	return nil
+ }
+--- a/pkg/hostpath/controllerserver.go
++++ b/pkg/hostpath/controllerserver.go
+@@ -660,7 +660,9 @@
+ 
+ 	klog.V(4).Infof("deleting snapshot %s", snapshotID)
+ 	path := hp.getSnapshotPath(snapshotID)
+-	os.RemoveAll(path)
++	if err := os.RemoveAll(path); err != nil {
++		return nil, err
++	}
+ 	if err := hp.state.DeleteSnapshot(snapshotID); err != nil {
+ 		return nil, err
+ 	}
+--- a/pkg/hostpath/groupcontrollerserver.go
++++ b/pkg/hostpath/groupcontrollerserver.go
+@@ -206,7 +206,9 @@
+ 	for _, snapshotID := range groupSnapshot.SnapshotIDs {
+ 		klog.V(4).Infof("deleting snapshot %s", snapshotID)
+ 		path := hp.getSnapshotPath(snapshotID)
+-		os.RemoveAll(path)
++		if err := os.RemoveAll(path); err != nil {
++			return nil, err
++		}
+ 
+ 		if err := hp.state.DeleteSnapshot(snapshotID); err != nil {
+ 			return nil, err
+--- a/pkg/hostpath/reflink.go
++++ b/pkg/hostpath/reflink.go
+@@ -0,0 +1,82 @@
++/*
++Copyright 2026.
++SPDX-License-Identifier: Apache-2.0
++*/
++
++package hostpath
++
++import (
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
++)
++
++// StateDirを専有する単一CSIプロセスの起動時に、異常終了で残った未公開のコピーだけを片付ける。
++func removePartialReflinks(root string) error {
++	entries, err := os.ReadDir(root)
++	if err != nil {
++		return err
++	}
++	for _, entry := range entries {
++		if entry.IsDir() && strings.HasPrefix(entry.Name(), ".kocto-reflink-") {
++			if err := os.RemoveAll(filepath.Join(root, entry.Name())); err != nil {
++				return err
++			}
++		}
++	}
++	return nil
++}
++
++// 検証用Filesystemボリュームをreflinkで複製する。通常コピーへは切り替えない。
++// 元VMはKubeVirt側で停止させる。稼働中に更新される複数ファイルの整合性は保証しない。
++func reflinkDirectory(source, destination string) error {
++	info, err := os.Lstat(source)
++	if err != nil {
++		return err
++	}
++	if !info.IsDir() {
++		return status.Error(codes.FailedPrecondition, "Filesystem snapshot must be a reflink directory; recreate legacy tar snapshots")
++	}
++	if info, err := os.Lstat(destination); err == nil {
++		if !info.IsDir() {
++			return status.Error(codes.AlreadyExists, "Reflink destination is not an empty directory")
++		}
++		empty, err := hostPathIsEmpty(destination)
++		if err != nil {
++			return err
++		}
++		if !empty {
++			return status.Error(codes.AlreadyExists, "Do not overwrite an existing volume or snapshot")
++		}
++	} else if !os.IsNotExist(err) {
++		return err
++	}
++	// 作成途中のSnapshotを公開しない。同じファイルシステム上の一時ディレクトリからrenameする。
++	temporary, err := os.MkdirTemp(filepath.Dir(destination), ".kocto-reflink-")
++	if err != nil {
++		return err
++	}
++	defer os.RemoveAll(temporary)
++	output, err := exec.Command("cp", "--archive", "--reflink=always", "--", source+"/.", temporary+"/").CombinedOutput()
++	if err != nil {
++		return status.Errorf(codes.FailedPrecondition, "Reflink copy failed; a CoW filesystem on the same device is required: %v: %s", err, output)
++	}
++	// reflinkで作ったinodeと共有ブロックの参照を永続化してからCSIへ成功を返す。
++	if output, err := exec.Command("sync", "-f", temporary).CombinedOutput(); err != nil {
++		return fmt.Errorf("could not sync reflink data: %w: %s", err, output)
++	}
++	if err := os.Rename(temporary, destination); err != nil {
++		return err
++	}
++	parent, err := os.Open(filepath.Dir(destination))
++	if err != nil {
++		return err
++	}
++	defer parent.Close()
++	return parent.Sync()
++}
+--- a/pkg/hostpath/reflink_test.go
++++ b/pkg/hostpath/reflink_test.go
+@@ -0,0 +1,196 @@
++/*
++Copyright 2026.
++SPDX-License-Identifier: Apache-2.0
++*/
++
++package hostpath
++
++import (
++	"bytes"
++	"context"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"testing"
++
++	"github.com/container-storage-interface/spec/lib/go/csi"
++	"github.com/kubernetes-csi/csi-driver-host-path/pkg/state"
++)
++
++func TestKoctoReflinkFailurePreservesDestination(t *testing.T) {
++	dir := t.TempDir()
++	source := filepath.Join(dir, "source")
++	target := filepath.Join(dir, "target")
++	if err := os.Mkdir(source, 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Mkdir(target, 0700); err != nil {
++		t.Fatal(err)
++	}
++	// cpの失敗を再現する。reflink非対応時に通常コピーで成功しないことを検証する。
++	bin := filepath.Join(dir, "bin")
++	if err := os.Mkdir(bin, 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(bin, "cp"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
++	if err := reflinkDirectory(source, target); err == nil {
++		t.Fatal("unsupported reflink succeeded")
++	}
++	entries, err := os.ReadDir(dir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, entry := range entries {
++		if strings.HasPrefix(entry.Name(), ".kocto-reflink-") {
++			t.Fatal("partial snapshot leaked")
++		}
++	}
++	if empty, err := hostPathIsEmpty(target); err != nil || !empty {
++		t.Fatalf("destination modified: %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(target, "keep"), []byte("original"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := reflinkDirectory(source, target); err == nil {
++		t.Fatal("nonempty destination overwritten")
++	}
++	if data, err := os.ReadFile(filepath.Join(target, "keep")); err != nil || string(data) != "original" {
++		t.Fatalf("existing data lost: %v", err)
++	}
++}
++
++func TestKoctoReflinkRejectsLegacyArchives(t *testing.T) {
++	dir := t.TempDir()
++	archive := filepath.Join(dir, "legacy.snap")
++	if err := os.WriteFile(archive, []byte("archive"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := reflinkDirectory(archive, filepath.Join(dir, "restore")); err == nil {
++		t.Fatal("legacy archive accepted")
++	}
++}
++
++func TestKoctoReflinkRestartRemovesOnlyPartialCopies(t *testing.T) {
++	dir := t.TempDir()
++	for _, name := range []string{".kocto-reflink-interrupted", "volume", "saved.snap"} {
++		if err := os.Mkdir(filepath.Join(dir, name), 0700); err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(filepath.Join(dir, name, "disk.img"), []byte("keep"), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if _, err := NewHostPathDriver(Config{StateDir: dir, DriverName: "hostpath.csi.k8s.io", NodeID: "test", Endpoint: "unix://" + filepath.Join(dir, "csi.sock")}); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Stat(filepath.Join(dir, ".kocto-reflink-interrupted")); !os.IsNotExist(err) {
++		t.Fatalf("partial copy remained: %v", err)
++	}
++	for _, name := range []string{"volume", "saved.snap"} {
++		if _, err := os.Stat(filepath.Join(dir, name, "disk.img")); err != nil {
++			t.Fatal(err)
++		}
++	}
++}
++
++// CIのファイルシステムがCoW対応とは限らないため、実機のXFS上で明示して実行する。
++func TestKoctoReflinkSnapshotRoundTrip(t *testing.T) {
++	root := os.Getenv("KOCTO_REFLINK_TEST_DIR")
++	if root == "" {
++		t.Skip("set KOCTO_REFLINK_TEST_DIR to a CoW filesystem for the integration test")
++	}
++	dir, err := os.MkdirTemp(root, "kocto-reflink-test-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { os.RemoveAll(dir) })
++	hp, err := NewHostPathDriver(Config{StateDir: dir, DriverName: "hostpath.csi.k8s.io", NodeID: "test", MaxVolumeSize: 1 << 30, Endpoint: "unix://" + filepath.Join(dir, "csi.sock")})
++	if err != nil {
++		t.Fatal(err)
++	}
++	source := filepath.Join(dir, "source")
++	if err := os.Mkdir(source, 0700); err != nil {
++		t.Fatal(err)
++	}
++	data := bytes.Repeat([]byte("source-data"), 100000)
++	if err := os.WriteFile(filepath.Join(source, "disk.img"), data, 0600); err != nil {
++		t.Fatal(err)
++	}
++	volume := state.Volume{VolID: "source", VolName: "source", VolPath: source, VolSize: 1 << 20, VolAccessType: state.MountAccess}
++	if err := hp.state.UpdateVolume(volume); err != nil {
++		t.Fatal(err)
++	}
++	snap, err := hp.CreateSnapshot(context.Background(), &csi.CreateSnapshotRequest{Name: "saved", SourceVolumeId: "source"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	// CSIの再起動後も同じsnapshotを復元できることを確認する。
++	hp, err = NewHostPathDriver(hp.config)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, name := range []string{"a", "b"} {
++		target := filepath.Join(dir, name)
++		if err := os.Mkdir(target, 0700); err != nil {
++			t.Fatal(err)
++		}
++		if err := hp.loadFromSnapshot(1<<20, snap.Snapshot.SnapshotId, target, state.MountAccess); err != nil {
++			t.Fatal(err)
++		}
++		got, err := os.ReadFile(filepath.Join(target, "disk.img"))
++		if err != nil || !bytes.Equal(got, data) {
++			t.Fatalf("restore differs: %v", err)
++		}
++		// 容量表示ではなくFIEMAPのSHAREDフラグで物理ブロックの共有を検証する。
++		output, err := exec.Command("xfs_io", "-r", "-c", "fiemap -v", filepath.Join(target, "disk.img")).CombinedOutput()
++		if err != nil {
++			t.Fatalf("fiemap failed: %v: %s", err, output)
++		}
++		shared := false
++		for _, line := range strings.Split(string(output), "\n") {
++			fields := strings.Fields(line)
++			if len(fields) == 0 {
++				continue
++			}
++			flags, err := strconv.ParseUint(fields[len(fields)-1], 0, 32)
++			if err == nil && flags&0x2000 != 0 {
++				shared = true
++			}
++		}
++		if !shared {
++			t.Fatalf("clone contains no shared physical extents: %s", output)
++		}
++	}
++	f, err := os.OpenFile(filepath.Join(dir, "a", "disk.img"), os.O_WRONLY, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := f.WriteAt([]byte("team-a"), 0); err != nil {
++		t.Fatal(err)
++	}
++	if err := f.Sync(); err != nil {
++		t.Fatal(err)
++	}
++	f.Close()
++	if _, err := hp.DeleteSnapshot(context.Background(), &csi.DeleteSnapshotRequest{SnapshotId: snap.Snapshot.SnapshotId}); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Stat(hp.getSnapshotPath(snap.Snapshot.SnapshotId)); !os.IsNotExist(err) {
++		t.Fatalf("snapshot remained: %v", err)
++	}
++	for _, path := range []string{filepath.Join(source, "disk.img"), filepath.Join(dir, "b", "disk.img")} {
++		got, err := os.ReadFile(path)
++		if err != nil || !bytes.Equal(got, data) {
++			t.Fatalf("source or sibling changed: %v", err)
++		}
++	}
++	got, err := os.ReadFile(filepath.Join(dir, "a", "disk.img"))
++	if err != nil || len(got) < 6 || !bytes.Equal(got[:6], []byte("team-a")) {
++		t.Fatalf("clone lost after snapshot deletion: %v", err)
++	}
++}

@@ -1,0 +1,23 @@
+# The upstream driver supplies the CSI lifecycle; this patch only changes
+# Filesystem snapshots/clones to require shared XFS extents in the dev cluster.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETARCH
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends patch \
+    && rm -rf /var/lib/apt/lists/*
+ADD https://codeload.github.com/kubernetes-csi/csi-driver-host-path/tar.gz/refs/tags/v1.18.0 /tmp/hostpath.tar.gz
+RUN echo '03d581877ed8a0a87851c59ca3d50b04663e17f8d5310eb964002b0a7fd73421  /tmp/hostpath.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/hostpath.tar.gz --strip-components=1 -C /src
+COPY reflink.patch /tmp/reflink.patch
+RUN patch -p1 < /tmp/reflink.patch
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    go test ./pkg/hostpath ./pkg/state \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /hostpathplugin ./cmd/hostpathplugin \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go test -c -o /reflink-tests ./pkg/hostpath
+
+FROM registry.k8s.io/sig-storage/hostpathplugin:v1.18.0
+# xfs_io lets the verification inspect actual shared physical extents.
+RUN apk add --no-cache xfsprogs
+COPY --from=builder /hostpathplugin /hostpathplugin
+COPY --from=builder /reflink-tests /reflink-tests
+ENTRYPOINT ["/hostpathplugin"]

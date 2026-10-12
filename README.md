@@ -45,6 +45,8 @@ Problemのロック中は作問VMを停止します。VMIとlauncher Podの消�
 
 基盤の導入手順は[検証クラスタの永続ディスク](config/dev-storage/README.md)を参照してください。
 
+検証クラスタのCSIにはFilesystem SnapshotをXFSのreflinkで保存する変更を加えています。作問ディスク、保存用Snapshot、各チームのPVCは元のブロックを共有し、書き換えた部分が追加の容量を消費します。PVCの論理容量とは異なります。reflinkを使えない場合は展開に失敗し、全コピーへは切り替えません。単一ノードのため、ノード障害への耐性はありません。
+
 ### チームVMの展開
 
 作問VMのディスクへ必要な変更を加えてから、同じnamespaceにProblemChallengeを作成します。`problemRef.name`に作問元、`placement.nodeSelector`に競技VMの配置条件、`teams`にチームIDを指定します。1つのProblemを同時に使えるChallengeは1つです。競合したChallengeは`Accepted=False / ProblemLocked`になり、先のChallengeが削除されても自動では展開しません。削除して作り直すことで再試行します。

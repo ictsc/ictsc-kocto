@@ -27,6 +27,10 @@ patches:
       kind: StatefulSet
       name: csi-hostpathplugin
     patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: ghcr-pull
       - op: replace
         path: /spec/template/spec/containers/2/ports/0/name
         value: registrar-probe

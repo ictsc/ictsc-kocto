@@ -14,6 +14,23 @@ permissions:
   contents: read
 
 jobs:
+  reflink-csi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      # The Dockerfile applies the pinned upstream patch and runs its unit tests.
+      # Shared physical extents are checked separately on the dev cluster's XFS.
+      - name: Build and test the development storage driver
+        uses: docker/build-push-action@v7
+        with:
+          context: config/dev-storage/reflink
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=reflink-csi
+          cache-to: type=gha,mode=max,scope=reflink-csi
+
   lint-and-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
