@@ -11,7 +11,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.22.0
   name: problemchallenges.lab.icttoracon.net
 spec:
   group: lab.icttoracon.net
@@ -182,7 +182,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.22.0
   name: problems.lab.icttoracon.net
 spec:
   group: lab.icttoracon.net
@@ -737,7 +737,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:46f28ee753e1f776e8fb70294804382450dbb139
+        image: ghcr.io/ictsc/ictsc-kocto:e8a73c46c6103b890ed17196eb85d4b680ef1aa6
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
