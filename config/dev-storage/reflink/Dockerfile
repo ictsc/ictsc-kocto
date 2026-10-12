@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM registry.k8s.io/sig-storage/hostpathplugin:v1.18.0
 # xfs_io lets the verification inspect actual shared physical extents.
-RUN apk add --no-cache xfsprogs
+RUN apk add --no-cache xfsprogs-extra && xfs_io -V
 COPY --from=builder /hostpathplugin /hostpathplugin
 COPY --from=builder /reflink-tests /reflink-tests
 RUN /hostpathplugin --version | grep -F 'v1.18.0-kocto-reflink'
