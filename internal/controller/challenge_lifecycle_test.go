@@ -145,6 +145,10 @@ func (f *challengeFixture) finishClone(id string) *virtv1.VirtualMachine {
 	source.Generation = 0
 	source.Finalizers = nil
 	source.Status = virtv1.VirtualMachineStatus{}
+	source.OwnerReferences = nil
+	source.Labels = nil
+	source.Spec.Template.ObjectMeta.Labels = nil
+	source.Annotations = map[string]string{"restore.kubevirt.io/lastRestoreUID": "tmp-restore-" + string(clone.UID) + "-restored-uid"}
 	data, err := json.Marshal(source)
 	Expect(err).NotTo(HaveOccurred())
 	patchData := []byte("[")

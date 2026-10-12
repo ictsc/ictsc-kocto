@@ -96,18 +96,12 @@ func challengeClone(c *labv1alpha1.ProblemChallenge, id string) (*clonev1.Virtua
 			VolumeNamePolicy: &policy,
 		},
 	}
+	// v1.9.0のRestore webhookは/spec以下の単純なパッチだけを受け付ける。
+	// metadataと配置は、復元元を確認した後に通常のVM更新で設定する。
 	patches := []struct {
 		path  string
 		value any
-	}{
-		{"/metadata/ownerReferences", []metav1.OwnerReference{challengeOwner(c)}},
-		{"/metadata/labels", challengeLabels(c, id)},
-		{"/metadata/annotations", map[string]string{challengeSnapshotAnnotation: string(c.Status.SnapshotRef.UID)}},
-		{"/spec/template/metadata/labels", challengeLabels(c, id)},
-		{"/spec/template/metadata/annotations", map[string]string{}},
-		{"/spec/template/spec/nodeSelector", c.Spec.Placement.NodeSelector},
-		{"/spec/runStrategy", "Manual"},
-	}
+	}{{"/spec/runStrategy", "Manual"}}
 	for _, patch := range patches {
 		data, err := json.Marshal(map[string]any{"op": "add", "path": patch.path, "value": patch.value})
 		if err != nil {

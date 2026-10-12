@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -127,11 +128,19 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 		}
 		return err
 	}
-	if !ownedByChallenge(vm, c) || (team.VMRef != nil && vm.UID != team.VMRef.UID) || !vm.DeletionTimestamp.IsZero() || vm.Labels[challengeUIDLabel] != string(c.UID) || vm.Annotations[challengeSnapshotAnnotation] != string(snapshot.UID) || vm.Spec.Template == nil || vm.Spec.RunStrategy == nil || *vm.Spec.RunStrategy != virtv1.RunStrategyManual || vm.Spec.Running != nil || len(vm.Spec.DataVolumeTemplates) != 0 {
+	if (team.VMRef != nil && vm.UID != team.VMRef.UID) || !vm.DeletionTimestamp.IsZero() || vm.Spec.Template == nil || vm.Spec.RunStrategy == nil || *vm.Spec.RunStrategy != virtv1.RunStrategyManual || vm.Spec.Running != nil || len(vm.Spec.DataVolumeTemplates) != 0 {
 		failTeam(c, team, "ResourceConflict", "Team VM identity or run policy changed")
 		return nil
 	}
-	if !equality.Semantic.DeepEqual(vm.Spec.Template.Spec.NodeSelector, c.Spec.Placement.NodeSelector) || vm.Spec.Template.ObjectMeta.Labels[challengeUIDLabel] != string(c.UID) || vm.Spec.Template.ObjectMeta.Labels[problemUIDLabel] != "" {
+	initialAdoption := !ownedByChallenge(vm, c)
+	if initialAdoption {
+		// Restoreは元VMのownerを取り除く。Clone UIDを含む復元済み注記と独立PVCの由来で確認する。
+		prefix := "tmp-restore-" + string(clone.UID) + "-"
+		if len(vm.OwnerReferences) != 0 || clone.UID == "" || !strings.HasPrefix(vm.Annotations["restore.kubevirt.io/lastRestoreUID"], prefix) || len(vm.Annotations["restore.kubevirt.io/lastRestoreUID"]) <= len(prefix) {
+			failTeam(c, team, "ResourceConflict", "Cannot prove the unowned VM was created by this clone")
+			return nil
+		}
+	} else if !equality.Semantic.DeepEqual(vm.Spec.Template.Spec.NodeSelector, c.Spec.Placement.NodeSelector) || vm.Labels[challengeUIDLabel] != string(c.UID) || vm.Annotations[challengeSnapshotAnnotation] != string(snapshot.UID) || vm.Spec.Template.ObjectMeta.Labels[challengeUIDLabel] != string(c.UID) || vm.Spec.Template.ObjectMeta.Labels[problemUIDLabel] != "" {
 		failTeam(c, team, "ResourceConflict", "Team placement or management labels changed")
 		return nil
 	}
@@ -155,6 +164,21 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 			return nil
 		}
 		return err
+	}
+	if initialAdoption {
+		if err := controllerutil.SetControllerReference(c, vm, r.Scheme); err != nil {
+			return err
+		}
+		vm.Labels = challengeLabels(c, team.ID)
+		if vm.Annotations == nil {
+			vm.Annotations = map[string]string{}
+		}
+		vm.Annotations[challengeSnapshotAnnotation] = string(snapshot.UID)
+		vm.Spec.Template.ObjectMeta.Labels = challengeLabels(c, team.ID)
+		vm.Spec.Template.Spec.NodeSelector = c.Spec.Placement.NodeSelector
+		if err := r.Update(ctx, vm); err != nil {
+			return err
+		}
 	}
 	team.PVCRef = resourceRef(pvc)
 	// VMやPVCの参照を先に保存し、初回起動後の消失を新規展開として扱わない。

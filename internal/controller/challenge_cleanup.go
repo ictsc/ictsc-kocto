@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
@@ -201,6 +202,14 @@ func (r *ProblemChallengeReconciler) deleteTeamVMs(ctx context.Context, c *labv1
 			return false, err
 		}
 		if err == nil {
+			if !ownedByChallenge(vm, c) && team.CloneRef != nil && strings.HasPrefix(vm.Annotations["restore.kubevirt.io/lastRestoreUID"], "tmp-restore-"+string(team.CloneRef.UID)+"-") && len(vm.OwnerReferences) == 0 {
+				if err := controllerutil.SetControllerReference(c, vm, r.Scheme); err != nil {
+					return false, err
+				}
+				if err := r.Update(ctx, vm); err != nil {
+					return false, err
+				}
+			}
 			if !ownedByChallenge(vm, c) || (team.VMRef != nil && team.VMRef.UID != vm.UID) {
 				return false, resourceFailure("ResourceConflict", "Do not delete another team VM")
 			}
