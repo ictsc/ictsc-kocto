@@ -1123,7 +1123,7 @@ spec:
         - --storage-class=kocto-hostpath
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:bc3af879b33428948cb90ce116f4160a49cc7bea
+        image: ghcr.io/ictsc/ictsc-kocto:55b43211f608fe5cd1395580e664d190b6d8c71e
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
