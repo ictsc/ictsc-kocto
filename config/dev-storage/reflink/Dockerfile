@@ -12,7 +12,7 @@ COPY reflink.patch /tmp/reflink.patch
 RUN patch -p1 < /tmp/reflink.patch
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go test ./pkg/hostpath ./pkg/state \
-    && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -o /hostpathplugin ./cmd/hostpathplugin \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags='-X main.version=v1.18.0-kocto-reflink' -o /hostpathplugin ./cmd/hostpathplugin \
     && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go test -c -o /reflink-tests ./pkg/hostpath
 
 FROM registry.k8s.io/sig-storage/hostpathplugin:v1.18.0
@@ -20,4 +20,5 @@ FROM registry.k8s.io/sig-storage/hostpathplugin:v1.18.0
 RUN apk add --no-cache xfsprogs
 COPY --from=builder /hostpathplugin /hostpathplugin
 COPY --from=builder /reflink-tests /reflink-tests
+RUN /hostpathplugin --version | grep -F 'v1.18.0-kocto-reflink'
 ENTRYPOINT ["/hostpathplugin"]

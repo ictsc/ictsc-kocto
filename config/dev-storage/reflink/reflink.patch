@@ -114,7 +114,7 @@
  			return nil, err
 --- a/pkg/hostpath/reflink.go
 +++ b/pkg/hostpath/reflink.go
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,93 @@
 +/*
 +Copyright 2026.
 +SPDX-License-Identifier: Apache-2.0
@@ -186,6 +186,17 @@
 +	// reflinkで作ったinodeと共有ブロックの参照を永続化してからCSIへ成功を返す。
 +	if output, err := exec.Command("sync", "-f", temporary).CombinedOutput(); err != nil {
 +		return fmt.Errorf("could not sync reflink data: %w: %s", err, output)
++	}
++	// Goのos.Renameは既存ディレクトリを置換できない。復元先として確保された空のものだけ外す。
++	if info, err := os.Lstat(destination); err == nil {
++		if !info.IsDir() {
++			return status.Error(codes.AlreadyExists, "Reflink destination changed")
++		}
++		if err := os.Remove(destination); err != nil {
++			return err
++		}
++	} else if !os.IsNotExist(err) {
++		return err
 +	}
 +	if err := os.Rename(temporary, destination); err != nil {
 +		return err
