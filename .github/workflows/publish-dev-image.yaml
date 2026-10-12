@@ -14,9 +14,9 @@ permissions:
 
 jobs:
   publish-and-render:
-    # Runs started by Dependabot (and Renovate) get a read-only GITHUB_TOKEN and
-    # no Actions secrets, so this job cannot push the image or the GitOps commit.
-    # Skip them here instead of failing on every dependency pull request.
+    # Bot pushes publish an image and rewrite dev-deploy, which syncs an
+    # unreviewed dependency branch into the shared development cluster. Skip
+    # them; a reviewed merge to main still deploys as before.
     if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
     runs-on: ubuntu-latest
     permissions:
