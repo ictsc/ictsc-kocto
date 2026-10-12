@@ -4,9 +4,14 @@ on:
   push:
     branches-ignore:
       - dev-deploy
+  # Merges made with GITHUB_TOKEN (for example by the auto-merge workflow) do
+  # not trigger push workflows, so that workflow dispatches this one instead.
+  workflow_dispatch:
 
 concurrency:
-  group: ictsc-kocto-dev-environment
+  # Bot branches get their own group so that their runs, which only skip the
+  # job, cannot cancel a deploy that is already running.
+  group: "ictsc-kocto-dev-environment-${{ (startsWith(github.ref_name, 'dependabot/') || startsWith(github.ref_name, 'renovate/')) && 'bots' || 'branches' }}"
   cancel-in-progress: true
 
 permissions:

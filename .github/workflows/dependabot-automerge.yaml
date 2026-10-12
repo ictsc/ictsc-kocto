@@ -9,6 +9,7 @@ on:
     types: [completed]
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -65,3 +66,11 @@ jobs:
         run: |
           gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
           echo "Merged pull request #$PR"
+
+      # A merge made with GITHUB_TOKEN does not trigger push workflows, so the
+      # development deploy for the new commit on main is dispatched explicitly.
+      - name: Deploy the merged commit to the development cluster
+        if: steps.gate.outputs.merge == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run publish-dev-image.yaml --repo "$GITHUB_REPOSITORY" --ref main
