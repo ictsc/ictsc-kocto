@@ -25,9 +25,14 @@ DependabotとRenovateが作成したbranchのpushでは、このdeploy用workflo
 
 Dependabotが`go.mod`とGitHub Actionsの依存を毎週確認し、更新PRを作成します（`.github/dependabot.yml`）。k8s.io系とcontroller-runtime、Ginkgo/Gomegaはgroup化しているため、まとまった1本のPRとして届きます。k8s関連はcontroller-runtime、controller-tools、envtestのKubernetesバージョンが連動するため、自動マージは使わず内容を確認してからmergeします。
 
-Pull requestではGitHub Actionsが`make lint`、`make test`、生成物の差分チェックを実行します（`.github/workflows/ci.yaml`）。DependabotのPRも同じ検証を通ります。
+Pull requestではGitHub Actionsが`make lint`、`make test`、生成物の差分チェックを実行します（`.github/workflows/ci.yaml`）。DependabotのPRも同じ検証を通ります。CIが成功すると、`workflow_run`でCI完了を待つ`.github/workflows/dependabot-automerge.yaml`がDependabotのPRをsquash mergeします（Dependabotの`pull_request`では`GITHUB_TOKEN`がread-onlyになるため、CI側ではなく`workflow_run`側でmergeします）。
 
-repository設定でDependabot alertsとsecurity updatesも有効にしています。脆弱性が検出されると更新PRが作成されます。security updateはgroup化の対象外なので、依存ごとに個別のPRとして届きます。
+自動マージの可否は`hack/dependabot-automerge-gate.sh`が`gh pr diff`の`go.mod`と`.github/workflows/`だけから判定し、次の更新は自動マージせず人がレビューします。
+
+- `k8s.io/*`と`sigs.k8s.io/*`の更新（controller-runtime、controller-tools、envtestのKubernetesバージョンが連動するため）
+- majorバージョンの更新（Go moduleとGitHub Actionsの`uses:`の両方）
+
+repository設定ではDependabot alerts、security updates、Allow auto-mergeを有効にしています。脆弱性が検出されると更新PRが作成され、security updateはgroup化の対象外なので依存ごとに個別のPRとして届きます。
 
 `Makefile`のツールバージョン（`KUSTOMIZE_VERSION`、`CONTROLLER_TOOLS_VERSION`、`GOLANGCI_LINT_VERSION`）とE2Eのcert-managerバージョン（`test/utils/utils.go`）はDependabotの対象外なので、手動で更新します。
 
