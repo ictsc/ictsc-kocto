@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      # Keep this on the same major as the publish workflow.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run linter
+        run: make lint
+
+      - name: Run unit tests
+        run: make test
+
+      # make test regenerates CRDs, DeepCopy code, formatting and vet output.
+      # A dirty tree means generated artifacts were not committed.
+      - name: Verify generated files are committed
+        run: git diff --exit-code

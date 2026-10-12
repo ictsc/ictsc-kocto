@@ -1,0 +1,67 @@
+name: Dependabot auto-merge
+
+# workflow_run waits for CI to finish and, unlike pull_request events from
+# Dependabot, is not limited to a read-only GITHUB_TOKEN, so this job can merge.
+# The workflow file must exist on the default branch for this event to fire.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v7
+
+      - name: Find the pull request
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          number="$(gh pr list --repo "$GITHUB_REPOSITORY" \
+            --head "${{ github.event.workflow_run.head_branch }}" \
+            --state open --json number --jq '.[0].number // empty')"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Check the update can be merged automatically
+        id: gate
+        if: steps.find.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.find.outputs.number }}
+        run: |
+          # The API reports Dependabot as "app/dependabot", the web UI as
+          # "dependabot[bot]".
+          author="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json author --jq .author.login)"
+          case "$author" in
+            dependabot\[bot\]|app/dependabot) ;;
+            *)
+              echo "Pull request #$PR was opened by $author"
+              exit 0
+              ;;
+          esac
+          gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/pull-request.diff"
+          if hack/dependabot-automerge-gate.sh "$RUNNER_TEMP/pull-request.diff"; then
+            echo "merge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Merge the pull request
+        if: steps.gate.outputs.merge == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.find.outputs.number }}
+        run: |
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+          echo "Merged pull request #$PR"
