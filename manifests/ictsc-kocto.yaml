@@ -97,6 +97,9 @@ spec:
             - problemRef
             - teams
             type: object
+            x-kubernetes-validations:
+            - message: ProblemChallenge spec is immutable
+              rule: self == oldSelf
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。
             properties:
@@ -168,6 +171,163 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - type
+                x-kubernetes-list-type: map
+              snapshotRef:
+                description: SnapshotRefは、出題元のProblemのスナップショットを示します。
+                properties:
+                  name:
+                    description: Nameは、参照するスナップショットの名前を指定します。
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UIDは、参照するスナップショットのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                - uid
+                type: object
+              sourceProblem:
+                description: SourceProblemは、出題元のProblemを示します
+                properties:
+                  generation:
+                    description: Generationは、ロック取得時のProblemのgenerationを記録します。
+                    format: int64
+                    type: integer
+                  name:
+                    description: Nameは、参照するProblemの名前を指定します。
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UIDは、参照するProblemのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - generation
+                - name
+                - uid
+                type: object
+              teams:
+                description: Teamsは、各チームの問題環境の状態を表します。
+                items:
+                  description: ProblemChallengeTeamStatusは、各チームの問題環境の状態を表します。
+                  properties:
+                    cloneRef:
+                      description: CloneRefは、チーム用のVirtualMachineCloneへの参照を示します。
+                      properties:
+                        name:
+                          description: Nameは、参照するリソースの名前を記録します。
+                          minLength: 1
+                          type: string
+                        uid:
+                          description: UIDは、参照するリソースのUIDを記録します。
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    conditions:
+                      description: Conditionsは、チームの問題環境の状態を種類ごとに表します。
+                      items:
+                        description: Condition contains details for one aspect of
+                          the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False,
+                              Unknown.
+                            enum:
+                            - "True"
+                            - "False"
+                            - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                        - lastTransitionTime
+                        - message
+                        - reason
+                        - status
+                        - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - type
+                      x-kubernetes-list-type: map
+                    id:
+                      description: IDは、チームの識別子を指定します。
+                      minLength: 1
+                      type: string
+                    pvcRef:
+                      description: PVCRefは、復元したチームのroot PVCへの参照を示します。
+                      properties:
+                        name:
+                          description: Nameは、参照するリソースの名前を記録します。
+                          minLength: 1
+                          type: string
+                        uid:
+                          description: UIDは、参照するリソースのUIDを記録します。
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    vmRef:
+                      description: VMRefは、復元したチームVMへの参照を示します。
+                      properties:
+                        name:
+                          description: Nameは、参照するリソースの名前を記録します。
+                          minLength: 1
+                          type: string
+                        uid:
+                          description: UIDは、参照するリソースのUIDを記録します。
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                  required:
+                  - id
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
                 x-kubernetes-list-type: map
             type: object
         required:
@@ -253,11 +413,21 @@ spec:
                     anyOf:
                     - type: integer
                     - type: string
-                    description: Diskはマシンのディスク容量を指定する
+                    description: |-
+                      Diskは初回取り込み時のroot PVCの要求容量を指定する。
+                      作成後は変更できない。
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: machine.disk must be a valid quantity greater than
+                        zero
+                      rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                    - message: machine.disk is immutable
+                      rule: self == oldSelf
                   image:
-                    description: Imageは、VMの起動元となるイメージを指定する
+                    description: |-
+                      Imageは、初回取り込み元のイメージを指定する。
+                      作成後は変更できない。
                     properties:
                       containerDisk:
                         description: ContainerDiskは、VMの起動元として使うコンテナディスクイメージを指定する
@@ -266,6 +436,9 @@ spec:
                     required:
                     - containerDisk
                     type: object
+                    x-kubernetes-validations:
+                    - message: machine.image is immutable
+                      rule: self == oldSelf
                   memory:
                     anyOf:
                     - type: integer
@@ -273,6 +446,10 @@ spec:
                     description: Memoryはマシンのメモリ容量を指定する
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: machine.memory must be a valid quantity greater than
+                        zero
+                      rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
                 required:
                 - cpu
                 - disk
@@ -316,6 +493,26 @@ spec:
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。
             properties:
+              activeChallenge:
+                description: ActiveChallengeは、ロックを所有するChallengeの情報を記録します。
+                properties:
+                  activeChallengeName:
+                    description: ActiveChallengeNameは、ロックを所有するChallengeの情報を示します。
+                    minLength: 1
+                    type: string
+                  problemGeneration:
+                    description: ProblemGenerationは、ロック取得時のProblemの世代を指定します。
+                    format: int64
+                    type: integer
+                  uid:
+                    description: UIDは、現在アクティブなChallengeのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - activeChallengeName
+                - problemGeneration
+                - uid
+                type: object
               conditions:
                 description: |-
                   Conditionsは、Problemの現在の状態を表します。
@@ -378,10 +575,44 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              diskRef:
+                description: DiskRefは、初回取り込みを管理するDataVolumeの名前とUIDを記録します。
+                properties:
+                  diskName:
+                    description: Nameは、初回取り込みを管理するDataVolumeの名前を指定します。
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UIDは、初回取り込みを管理するDataVolumeのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - diskName
+                - uid
+                type: object
+              vmRef:
+                description: VMRefは、管理する作問VMの名前とUIDを記録します。
+                properties:
+                  uid:
+                    description: UIDは、管理する作問VMのUIDを指定します。
+                    minLength: 1
+                    type: string
+                  vmName:
+                    description: Nameは、管理する作問VMの名前を指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - uid
+                - vmName
+                type: object
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: Problem spec cannot change while locked by a Challenge
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec
+            == oldSelf.spec'
     served: true
     storage: true
     subresources:
@@ -737,7 +968,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:9a6306b22780685543ccea378a0e4a8fc4f81d57
+        image: ghcr.io/ictsc/ictsc-kocto:a5df870d2737094f640122a5595f3f3182114cad
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
