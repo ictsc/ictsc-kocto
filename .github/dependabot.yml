@@ -1,0 +1,53 @@
+version: 2
+
+updates:
+  # Go modules. k8s.io/* and controller-runtime move together, and envtest's
+  # Kubernetes version is derived from go.mod in the Makefile, so coupled
+  # dependencies are grouped into a single reviewable pull request.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      kubernetes:
+        patterns:
+          - k8s.io/*
+          - sigs.k8s.io/*
+      testing:
+        patterns:
+          - github.com/onsi/ginkgo*
+          - github.com/onsi/gomega
+      go-modules:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # Actions used by the workflows in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      github-actions:
+        patterns:
+          - "*"

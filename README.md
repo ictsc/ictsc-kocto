@@ -19,6 +19,16 @@ make run                 # 手元でcontrollerを起動
 
 `dev-deploy`以外のbranchをpushすると、GitHub ActionsがimageとGitOps用マニフェストを生成し、Argo CDがクラスタへdeployします。Makefileにはクラスタへのdeploy操作を置いていません。実際の手順は「GitHub ActionsとArgo CDによる開発deploy」を参照してください。
 
+DependabotとRenovateが作成したbranchのpushでは、このdeploy用workflowは実行しません。これらのbotが起こすworkflow runはfork扱いとなり、read-onlyの`GITHUB_TOKEN`とsecretsなしで動くため、imageのpushとGitOps branchへのcommitができないからです。
+
+### 依存関係の更新とPRの検証
+
+Dependabotが`go.mod`とGitHub Actionsの依存を毎週確認し、更新PRを作成します（`.github/dependabot.yml`）。k8s.io系とcontroller-runtime、Ginkgo/Gomegaはgroup化しているため、まとまった1本のPRとして届きます。k8s関連はcontroller-runtime、controller-tools、envtestのKubernetesバージョンが連動するため、自動マージは使わず内容を確認してからmergeします。
+
+Pull requestではGitHub Actionsが`make lint`、`make test`、生成物の差分チェックを実行します（`.github/workflows/ci.yaml`）。DependabotのPRも同じ検証を通ります。
+
+`Makefile`のツールバージョン（`KUSTOMIZE_VERSION`、`CONTROLLER_TOOLS_VERSION`、`GOLANGCI_LINT_VERSION`）とE2Eのcert-managerバージョン（`test/utils/utils.go`）はDependabotの対象外なので、手動で更新します。
+
 ### Kind専用E2Eテスト
 
 Talosの開発クラスタとは別に、DockerとKindを使う使い捨てクラスタで実行します。
