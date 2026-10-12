@@ -21,6 +21,24 @@ make run                 # 手元でcontrollerを起動
 
 DependabotとRenovateが作成したbranchのpushでは、このdeploy用workflowは実行しません。botのbranchがimageとしてpushされ`dev-deploy`が書き換わると、未レビューの依存更新が共有の開発クラスタへsyncされてしまうためです。レビュー済みの変更を`main`へmergeしたときは、これまでどおりdeployします。
 
+### 作問VMの永続ディスク
+
+Problem controllerは、初回だけCDIのDataVolumeでcontainerDiskの内容をPVCへ取り込み、そのPVCからKubeVirt VMを起動します。VMの再作成やCPU/memoryの変更でも同じPVCを使います。取り込み済みのディスクを失った場合は、作問データを守るため自動で再取り込みしません。
+
+起動にはKubeVirt v1.9.0、CDI、Filesystem/RWOに対応するImmediate bindingのStorageClassが必要です。基盤の導入は別途行います。`config/manager/manager.yaml`の`--storage-class=`に、基盤で用意したStorageClassの名前を指定してください。空のままではmanagerは起動しません。手元で起動するときは次のように指定します。
+
+```sh
+make run STORAGE_CLASS=<用意したStorageClassの名前>
+```
+
+サンプルは公開されているCirrosのコンテナディスクをdigestで固定し、1CPU、128MiB、1GiBのrootディスクにしています。sourceとaccessは保持していますが、現在のcontrollerはGit取得、Ansible、ネットワーク構築を実行しません。ゲストNICを接続せず、cloud-initも生成しないため、確認にはシリアルコンソールを使います。ReadyはKubeVirtのVM準備状態であり、ゲスト内の問題構築完了を意味しません。
+
+Problemのロック中は作問VMを停止します。VMIとlauncher Podの消失を確認してからQuiescedを記録します。停止待ちは5分でタイムアウトを表示し、ロックを維持します。KubeVirt側は300秒のgrace period後に強制終了する場合があるため、アプリケーションの整合性は保証しません。Challengeによるロック取得とSnapshot/Cloneの処理は、後続の実装段階です。
+
+利用者にはProblem/ProblemChallengeと必要なコンソール権限を与え、管理VMのspec、start/stop、PVC、親CRのstatusを直接操作する権限は与えません。Haltedだけではvirtctl startを防げません。cluster-adminによる操作やfinalizerの強制除去は、この保護の対象外です。
+
+テスト用のKubeVirt/CDI CRDは`test/fixtures/crds`に版を固定して置いています。envtestではAPIの動作を検証し、Kind E2EではCRDだけを導入してmanagerとmetricsを確認します。いずれも実際のVMやディスク取り込みの成功を検証するものではありません。
+
 ### 依存関係の更新とPRの検証
 
 Dependabotが`go.mod`とGitHub Actionsの依存を毎週確認し、更新PRを作成します（`.github/dependabot.yml`）。k8s.io系とcontroller-runtime、Ginkgo/Gomegaはgroup化しているため、まとまった1本のPRとして届きます。k8s関連はcontroller-runtime、controller-tools、envtestのKubernetesバージョンが連動するため、自動マージは使わず内容を確認してからmergeします。

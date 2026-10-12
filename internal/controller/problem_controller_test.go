@@ -111,12 +111,12 @@ var _ = Describe("Problem Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedProblem)).To(Succeed())
 			Expect(updatedProblem.Spec.Machine.Image.ContainerDisk).To(Equal("ghcr.io/ictsc/kocto-runner:latest"))
 
-			readyCondition := apiMeta.FindStatusCondition(updatedProblem.Status.Conditions, "Ready")
+			readyCondition := apiMeta.FindStatusCondition(updatedProblem.Status.Conditions, "VMReady")
 
 			Expect(readyCondition).NotTo(BeNil())
 
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(readyCondition.Reason).To(Equal("ProvisionerNotImplemented"))
+			Expect(readyCondition.Reason).To(Equal("StorageClassRequired"))
 			Expect(readyCondition.ObservedGeneration).To(Equal(updatedProblem.Generation))
 		})
 
@@ -147,7 +147,7 @@ var _ = Describe("Problem Controller", func() {
 
 				created := &labv1alpha1.Problem{}
 				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: sample.Namespace, Name: sample.Name}, created)).To(Succeed())
-				Expect(created.Spec.Machine.Image.ContainerDisk).To(Equal("ghcr.io/ictsc/kocto-runner:latest"))
+				Expect(created.Spec.Machine.Image.ContainerDisk).To(Equal("quay.io/kubevirt/cirros-container-disk-demo@sha256:9d36bdd2b8f86e37058a58be47f82c9e94e2741df8fc8144cecf80fd953c8643"))
 				sampleCount++
 			}
 			Expect(sampleCount).To(BeNumerically(">", 0))

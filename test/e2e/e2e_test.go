@@ -63,6 +63,11 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
+		By("installing pinned KubeVirt and CDI CRDs without running virtualization controllers")
+		cmd = exec.Command("kubectl", "apply", "--server-side", "--field-manager=kocto-e2e", "-f", "test/fixtures/crds")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to install external CRDs")
+
 		By("installing CRDs and deploying the controller-manager in Kind")
 		cmd = exec.Command("kubectl", "apply", "-f", managerManifest)
 		_, err = utils.Run(cmd)
