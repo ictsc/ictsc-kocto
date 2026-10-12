@@ -27,7 +27,10 @@ import (
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
 )
 
-// ProblemChallengeReconciler reconciles a ProblemChallenge object
+// ProblemChallengeReconcilerは、競技用VMの展開と状態の管理を行う。処理はまだ未実装。
+// 競技の公平性のため、競技用VMはHA対象にしない。障害や消失後の自動再起動、
+// 別ノードへの移動、スナップショットからの自動再複製は行わず、障害を報告する。
+// controller自体の復旧と処理の再開は許可するが、それを競技用VMの復旧契機にはしない。
 type ProblemChallengeReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -37,24 +40,20 @@ type ProblemChallengeReconciler struct {
 // +kubebuilder:rbac:groups=lab.icttoracon.net,resources=problemchallenges/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=lab.icttoracon.net,resources=problemchallenges/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the ProblemChallenge object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.2/pkg/reconcile
+// Reconcileは、今後ロック取得、作問VMの停止確認、Snapshot保存、チーム展開を進める入口。
+// 現在は未実装なので、リソースの作成やstatus更新を行わずに終了する。
 func (r *ProblemChallengeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// TODO: 同じ確定済みSnapshotから全チームを展開し、初回起動と障害後の復旧を区別する。
+	// 作問VM用のAlwaysを競技用VMへ適用しない。Manualなどで初回のみ起動し、
+	// controllerの再起動や反復Reconcileでも失敗した競技用VMを再作成や再起動しない。
+	// 展開完了後はチームVMとPVCの状態を確認し、作問VMのReadyには依存させない。
 
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// SetupWithManagerは、ProblemChallengeの変更を受けてReconcileが呼ばれるように監視を登録する。
 func (r *ProblemChallengeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&labv1alpha1.ProblemChallenge{}).

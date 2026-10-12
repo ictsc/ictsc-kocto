@@ -48,6 +48,8 @@ var (
 )
 
 func init() {
+	// Schemeへ型を登録し、ClientがProblem、KubeVirt、CDIのオブジェクトを読み書きできるようにする。
+	// これはGoの型の登録であり、クラスタへCRDや各operatorを導入する処理ではない。
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(labv1alpha1.AddToScheme(scheme))
@@ -160,6 +162,8 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
+	// managerがClient、リソースの監視キャッシュ、controller、metrics、ヘルスチェックを管理する。
+	// leader electionを有効にすると、同じLeaseを使うmanagerのうち1台だけがcontrollerを動かす。
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -184,6 +188,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 通常のClientは読み取りにキャッシュを使う。ロックや所有関係の判断用にAPIReaderも渡す。
+	// SetupWithManagerでProblemとその子リソースの監視を登録する。
 	if err := (&controller.ProblemReconciler{
 		Client:       mgr.GetClient(),
 		APIReader:    mgr.GetAPIReader(),
@@ -202,6 +208,7 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
+	// ここでのhealthz/readyzはmanager自身の応答確認。作問VMの起動完了はProblemのVMReadyで示す。
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "Failed to set up health check")
 		os.Exit(1)
@@ -211,6 +218,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// SIGINT/SIGTERMを受けたら停止するcontextでmanagerを起動し、監視とReconcileを開始する。
 	setupLog.Info("Starting manager")
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "Failed to run manager")

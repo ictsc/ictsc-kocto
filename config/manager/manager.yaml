@@ -21,6 +21,8 @@ spec:
     matchLabels:
       control-plane: controller-manager
       app.kubernetes.io/name: ictsc-kocto
+  # 開発クラスタは単一ノードなので1台。本番のHAでは複数ノードに配置し、leader electionで引き継ぐ。
+  # controllerのHAは競技用VMの自動復旧とは別であり、競技用VMの復旧を有効にするものではない。
   replicas: 1
   template:
     metadata:
