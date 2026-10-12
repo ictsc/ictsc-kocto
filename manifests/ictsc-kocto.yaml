@@ -737,7 +737,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:b4adb8808c43527174391c948647bec8c6750b0f
+        image: ghcr.io/ictsc/ictsc-kocto:c02c73b3e1d291e653f77065756e60fb0bdb13b0
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
