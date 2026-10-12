@@ -52,7 +52,9 @@ CERT_MANAGER_INSTALL_SKIP=true make test-e2e
 
 ### Proxmox上のTalos開発環境
 
-`nuta1`上のVMID100を使う単一ノード環境です。Proxmox VEは9.2.20、CPUタイプは`host`、Talosは1.14.2、Kubernetesは1.36.5、KubeVirtは1.9.0です。VMID100には4 vCPU、8 GiBメモリ、32 GiBのシステムディスクを割り当てています。Kubernetesの単一ノード上でContainerDiskのVMを試す用途です。[Talos 1.14はKubernetes 1.36をサポート](https://docs.siderolabs.com/talos/v1.14/getting-started/support-matrix)し、[KubeVirt 1.9はKubernetes 1.36向け](https://github.com/kubevirt/sig-release/blob/main/releases/k8s-support-matrix.md)です。[TalosのProxmoxガイド](https://docs.siderolabs.com/talos/v1.14/platform-specific-installations/virtualized-platforms/proxmox)に従いCPUタイプを`host`にして、ホストCPU機能をゲストへ渡します。
+Proxmox上のVMID100を使う単一ノード環境です。Proxmox VEは9.2.20、CPUタイプは`host`、Talosは1.14.2、Kubernetesは1.36.5、KubeVirtは1.9.0です。VMID100には4 vCPU、8 GiBメモリ、32 GiBのシステムディスクを割り当てています。Kubernetesの単一ノード上でContainerDiskのVMを試す用途です。[Talos 1.14はKubernetes 1.36をサポート](https://docs.siderolabs.com/talos/v1.14/getting-started/support-matrix)し、[KubeVirt 1.9はKubernetes 1.36向け](https://github.com/kubevirt/sig-release/blob/main/releases/k8s-support-matrix.md)です。[TalosのProxmoxガイド](https://docs.siderolabs.com/talos/v1.14/platform-specific-installations/virtualized-platforms/proxmox)に従いCPUタイプを`host`にして、ホストCPU機能をゲストへ渡します。
+
+この節のコマンドは、環境固有の値（ProxmoxホストのIPアドレス、TalosノードのIPアドレス、Proxmox用SSH鍵のパス）を`<...>`のプレースホルダで示します。実際の値は手元の環境やリポジトリ外の手順書を参照し、コマンド例の環境変数を自分の値に置き換えてから実行してください。
 
 #### Talosの再構築
 
@@ -61,13 +63,15 @@ Kubernetes 1.36系のpatchは、実行時に`https://dl.k8s.io/release/stable-1.
 ```sh
 export TALOS_DIR="$HOME/talos-for-ictsc-kocto-test"
 export TALOSCONFIG="$TALOS_DIR/talosconfig"
-export TALOS_NODE_IP=172.18.2.21
+export PROXMOX_HOST="<ProxmoxホストのIPアドレス>"
+export PROXMOX_SSH_KEY="$HOME/.ssh/<Proxmox用のSSH鍵>"
+export TALOS_NODE_IP="<TalosノードのIPアドレス>"
 export BACKUP_DIR="$HOME/ictsc-talos-backups/ictsc-kocto-test-$(date +%Y%m%d%H%M%S)"
 
 umask 077
 mkdir -p -m 700 "$BACKUP_DIR"
 cp "$TALOS_DIR/controlplane.yaml" "$TALOS_DIR/worker.yaml" "$TALOSCONFIG" "$BACKUP_DIR/"
-ssh -i "$HOME/.ssh/ictsc2026" root@172.18.2.1 'qm config 100' > "$BACKUP_DIR/qm-100.conf"
+ssh -i "$PROXMOX_SSH_KEY" "root@$PROXMOX_HOST" 'qm config 100' > "$BACKUP_DIR/qm-100.conf"
 chmod 600 "$BACKUP_DIR"/*
 ```
 
@@ -77,7 +81,7 @@ Talosの`STATE`と`EPHEMERAL`を初期化するとクラスタ状態が消えま
 talosctl --talosconfig "$TALOSCONFIG" reset --nodes "$TALOS_NODE_IP" \
   --system-labels-to-wipe STATE --system-labels-to-wipe EPHEMERAL \
   --graceful=false --reboot=false --wait
-ssh -i "$HOME/.ssh/ictsc2026" root@172.18.2.1 'qm set 100 --cpu host && qm start 100'
+ssh -i "$PROXMOX_SSH_KEY" "root@$PROXMOX_HOST" 'qm set 100 --cpu host && qm start 100'
 
 talosctl version --insecure --nodes "$TALOS_NODE_IP"
 talosctl apply-config --insecure --nodes "$TALOS_NODE_IP" --file "$TALOS_DIR/controlplane.yaml"
@@ -265,7 +269,7 @@ kubectl --context="$DEV_CONTEXT" delete -f \
   https://github.com/kubevirt/kubevirt/releases/download/v1.9.0/kubevirt-operator.yaml
 ```
 
-Proxmox接続は`$HOME/.ssh/ictsc2026`を使います。パスワード入力が求められた場合は入力せず、接続情報を確認してください。
+Proxmoxへの接続にはProxmox用のSSH鍵（環境変数`PROXMOX_SSH_KEY`）を使います。パスワード入力が求められた場合は入力せず、接続情報を確認してください。
 
 ## Contributing
 // TODO(user): Add detailed information on how you would like others to contribute to this project
