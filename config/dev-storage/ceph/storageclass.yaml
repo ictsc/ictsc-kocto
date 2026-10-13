@@ -1,0 +1,32 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kocto-ceph-rbd
+provisioner: rbd.csi.ceph.com
+parameters:
+  clusterID: 6e69baff-8661-46bd-a631-5c6f4a97af12
+  pool: kocto-dev
+  imageFeatures: layering,exclusive-lock,object-map,fast-diff,deep-flatten
+  csi.storage.k8s.io/fstype: ext4
+  csi.storage.k8s.io/provisioner-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/provisioner-secret-namespace: kocto-ceph-storage
+  csi.storage.k8s.io/controller-expand-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/controller-expand-secret-namespace: kocto-ceph-storage
+  csi.storage.k8s.io/node-stage-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/node-stage-secret-namespace: kocto-ceph-storage
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+---
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: kocto-ceph-rbd
+  annotations:
+    snapshot.storage.kubernetes.io/is-default-class: "true"
+driver: rbd.csi.ceph.com
+deletionPolicy: Delete
+parameters:
+  clusterID: 6e69baff-8661-46bd-a631-5c6f4a97af12
+  csi.storage.k8s.io/snapshotter-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/snapshotter-secret-namespace: kocto-ceph-storage
