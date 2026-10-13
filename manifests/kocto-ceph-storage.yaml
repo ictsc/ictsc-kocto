@@ -27,6 +27,25 @@ provisioner: rbd.csi.ceph.com
 reclaimPolicy: Delete
 volumeBindingMode: Immediate
 ---
+allowVolumeExpansion: true
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kocto-ceph-rbd-block
+parameters:
+  clusterID: 6e69baff-8661-46bd-a631-5c6f4a97af12
+  csi.storage.k8s.io/controller-expand-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/controller-expand-secret-namespace: kocto-ceph-storage
+  csi.storage.k8s.io/node-stage-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/node-stage-secret-namespace: kocto-ceph-storage
+  csi.storage.k8s.io/provisioner-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/provisioner-secret-namespace: kocto-ceph-storage
+  imageFeatures: layering,exclusive-lock,object-map,fast-diff,deep-flatten
+  pool: kocto-dev
+provisioner: rbd.csi.ceph.com
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -899,6 +918,18 @@ spec:
   - accessModes:
     - ReadWriteOnce
     volumeMode: Filesystem
+  cloneStrategy: snapshot
+---
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: StorageProfile
+metadata:
+  name: kocto-ceph-rbd-block
+  namespace: kocto-ceph-storage
+spec:
+  claimPropertySets:
+  - accessModes:
+    - ReadWriteOnce
+    volumeMode: Block
   cloneStrategy: snapshot
 ---
 apiVersion: snapshot.storage.k8s.io/v1
