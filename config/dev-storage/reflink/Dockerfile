@@ -10,6 +10,12 @@ RUN echo '03d581877ed8a0a87851c59ca3d50b04663e17f8d5310eb964002b0a7fd73421  /tmp
     && tar -xzf /tmp/hostpath.tar.gz --strip-components=1 -C /src
 COPY reflink.patch /tmp/reflink.patch
 RUN patch -p1 < /tmp/reflink.patch
+# These sources belong to the upstream hostpath package. The ignore tag keeps
+# controller-gen and the manager's Go tests from loading them in this repository.
+COPY reflink.go reflink_test.go /src/pkg/hostpath/
+RUN test -z "$(gofmt -l pkg/hostpath/reflink.go pkg/hostpath/reflink_test.go)" \
+    && sed -i '/^\/\/go:build ignore$/d' pkg/hostpath/reflink.go pkg/hostpath/reflink_test.go \
+    && gofmt -w pkg/hostpath/reflink.go pkg/hostpath/reflink_test.go
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go test ./pkg/hostpath ./pkg/state \
     && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags='-X main.version=v1.18.0-kocto-reflink' -o /hostpathplugin ./cmd/hostpathplugin \
