@@ -1150,7 +1150,7 @@ spec:
         - --storage-class=kocto-ceph-rbd
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:ebe67b608d3e1691cab860a18fe5605eb0c7e3af
+        image: ghcr.io/ictsc/ictsc-kocto:2b1c5077abc3f51413f20f99d9ada2e28b7fe828
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
