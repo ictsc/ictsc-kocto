@@ -85,4 +85,47 @@ Snapshotから復元したPVCのPVにはimageNameが記録されます。Proxmox
 
 RBDはSnapshotを親とするCoWクローンです。ext4の管理情報やVMの起動時の書き込みでも差分が増えます。`rbd du`はRBDオブジェクトの使用量で、BlueStoreの管理情報を含めた物理ディスク全体の使用量ではありません。Ceph-CSIはクローンの深さやSnapshot数によってflattenする場合があり、常に差分だけで済む保証ではありません。今回の浅いクローンでは親参照と使用量を実測します。
 
+起動したChallengeの親参照と使用量をまとめて読む場合は、次のコマンドを使います。このスクリプトはKubernetesの参照先UIDを確認し、Cephのinfo/duを読むだけです。CSIの実装や復元処理には関与しません。
+
+```sh
+python3 hack/inspect-ceph-clone.py \
+  --context admin@ictsc-kocto-test \
+  --ssh-target root@172.18.2.1 --ssh-key ~/.ssh/ictsc2026 \
+  <namespace> <challenge>
+```
+
+## PVCとVolumeSnapshotの検証結果
+
+2026-10-13に1GiBのFilesystem PVCへ64MiBのランダムデータを書き、Podを停止してSnapshotを作りました。同じSnapshotから2つのPVCを復元し、元のデータとSHA256が一致することを確認しました。
+
+| RBDの使用量 | 復元直後 | aで16MiBを書き換えた後 |
+| --- | --- | --- |
+| 元のvolumeとそのSnapshot | 92MiB | 92MiB |
+| 保存用のCSI内部イメージ | 0MiB | 0MiB |
+| team-aの差分 | 8MiB | 24MiB |
+| team-bの差分 | 8MiB | 8MiB |
+| 合計 | 108MiB | 124MiB |
+
+保存用のCSI内部イメージは元volumeのSnapshotを親にし、team-a/bは保存用イメージのSnapshotを親にしていました。両方の親参照が残っていることを`rbd info`で確認しました。ext4のUUID変更やmount時の書き込みにより、復元先は8MiBずつ使用しています。64MiBの元データを2回コピーしている状態ではありません。
+
+片方の先頭16MiBを書き換えると、そのRBDの使用量だけが16MiB増えました。もう片方と元のSHA256は変わりませんでした。元のPodを再作成して再度読み取っています。チームのPVC、保存したSnapshot、元のPVCの順で片付け、CSI内部イメージとRBDのtrashに残存しないことを確認しました。
+
+## Problem/ProblemChallengeの検証結果
+
+同じCeph上でProblemから作問VMを起動し、ゲストに32MiBのランダムデータと確認用の文字列を書きました。ProblemChallengeを作ると、作問VMが停止し、SnapshotReady=Trueになり、2チームのVMがRunning/Ready=Trueになりました。両チームでデータと文字列を読み取れ、SHA256が保存時と一致しました。
+
+| RBDの使用量 | ゲスト起動後 | aで16MiBを書き換えた後 |
+| --- | --- | --- |
+| 作問volumeとそのSnapshot | 160MiB | 160MiB |
+| 保存用のCSI内部イメージ | 0MiB | 0MiB |
+| team-aの差分 | 48MiB | 72MiB |
+| team-bの差分 | 48MiB | 48MiB |
+| 合計 | 256MiB | 280MiB |
+
+両チームは保存用イメージの同じSnapshotを親にしていました。その保存用イメージも作問volumeのSnapshotを親にしており、保存と展開のどちらでも全コピーになっていません。ゲストの先頭16MiBを書き換えた後、team-bのSHA256は変わりませんでした。使用量の増加は24MiBで、4MiB単位のRBDオブジェクトのコピーや、VMの通常の書き込みも含まれます。
+
+Challengeを削除するとチームのVM/PVCとSnapshotが削除され、作問VMが再開しました。VM/DataVolume/PVC/PVのUIDとPVCの作成時刻は変わらず、初回取り込みもやり直していません。作問VMで読み直したSHA256と確認用文字列は保存時と一致しました。元のRBDにSnapshotは残らず、CSI内部イメージとtrashも削除されました。検証用のProblemとnamespaceは最後に片付け、CephとCSIの基盤は残します。
+
+`machine.disk: 1Gi`に対して、CDIがFilesystemの管理情報用の余裕を加えて要求し、Ceph-CSIがGiB単位で切り上げるため、PVCの容量は2GiBになりました。ゲストから見たディスクも作問VMの1GiBに対し、復元したVMでは約1.77GiBでした。内容の保存と差分共有は確認できましたが、作問VMと復元先でゲストに見えるディスクサイズは一致していません。切り上げは[Ceph-CSIの容量計算](https://github.com/ceph/ceph-csi/blob/v3.18.1/internal/util/util.go#L60)によるものです。
+
 参考: [Ceph-CSIの配置](https://ceph.github.io/ceph-csi/rbd/deploy/)、[RBDのSnapshotとクローン](https://docs.ceph.com/en/latest/rbd/rbd-snapshot/)、[LVからのOSD作成](https://docs.ceph.com/en/latest/ceph-volume/lvm/create/)
