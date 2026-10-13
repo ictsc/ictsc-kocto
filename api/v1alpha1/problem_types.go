@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,6 +28,7 @@ import (
 // フィールドを追加するときはJSONタグも指定してください。
 
 // ProblemSpecはProblemに指定する内容を表します。
+// +kubebuilder:validation:XValidation:rule="has(self.storage) == has(oldSelf.storage)",message="storage cannot be added or removed after Problem creation"
 type ProblemSpec struct {
 	// 作問者が指定するフィールドをここに追加します。
 	// 型を変更したらmake manifestsとmake generateを実行してください。
@@ -40,11 +42,32 @@ type ProblemSpec struct {
 	// +required
 	Machine ProblemMachineSpec `json:"machine"`
 
+	// Storageは初回取り込み先を指定する。省略時はmanagerのStorageClassとFilesystemを使う。
+	// 既存Problemへの後付けや削除は禁止し、作問済みのディスクを別の構成へ切り替えない。
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storage is immutable"
+	// +optional
+	Storage *ProblemStorageSpec `json:"storage,omitempty"`
+
 	// +kubebuilder:validation:MinItems=1
 	// +listType=map
 	// +listMapKey=name
 	// +required
 	Access []AccessEndpoint `json:"access"`
+}
+
+// ProblemStorageSpecは作問ディスクの保存先と接続方法を表す。アクセスモードはRWOを使う。
+type ProblemStorageSpec struct {
+	// StorageClassNameは初回取り込み先のStorageClass名を指定する。
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+	// +required
+	StorageClassName string `json:"storageClassName"`
+
+	// VolumeModeはFilesystemまたはBlockを指定する。作成後に変換しない。
+	// +kubebuilder:validation:Enum=Filesystem;Block
+	// +required
+	VolumeMode corev1.PersistentVolumeMode `json:"volumeMode"`
 }
 
 // ProblemSourceSpecは問題のソース情報を表す

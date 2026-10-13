@@ -223,24 +223,25 @@ func (r *ProblemChallengeReconciler) recordSnapshotChildren(ctx context.Context,
 	return content, volume, nil
 }
 
-// 復元PVCの由来を調べるため、保存済みのroot CSI snapshot名と元PVCのUIDを返す。
-func (r *ProblemChallengeReconciler) rootSnapshot(ctx context.Context, c *labv1alpha1.ProblemChallenge) (string, types.UID, error) {
+// 復元PVCの由来とストレージ設定を照合するため、Snapshotに保存された元PVCを返す。
+// 稼働中のmanager設定や現在のStorageProfileで保存時の構成を上書きしない。
+func (r *ProblemChallengeReconciler) rootSnapshot(ctx context.Context, c *labv1alpha1.ProblemChallenge) (string, *snapshotv1.PersistentVolumeClaim, error) {
 	ref := c.Status.SnapshotRef
 	if ref == nil || ref.ContentRef == nil || ref.VolumeSnapshotRef == nil {
-		return "", "", resourceFailure("SnapshotNotReady", "Root snapshot references are not recorded")
+		return "", nil, resourceFailure("SnapshotNotReady", "Root snapshot references are not recorded")
 	}
 	content := &snapshotv1.VirtualMachineSnapshotContent{}
 	if err := r.reader().Get(ctx, types.NamespacedName{Name: ref.ContentRef.Name, Namespace: c.Namespace}, content); err != nil {
-		return "", "", err
+		return "", nil, err
 	}
 	if content.UID != ref.ContentRef.UID || content.Name != challengeSnapshotContentName(ref.UID) || len(content.Spec.VolumeBackups) != 1 || content.Spec.VolumeBackups[0].VolumeName != "root" {
-		return "", "", resourceFailure("ResourceConflict", "Root snapshot content identity changed")
+		return "", nil, resourceFailure("ResourceConflict", "Root snapshot content identity changed")
 	}
 	backup := content.Spec.VolumeBackups[0]
 	if backup.VolumeSnapshotName == nil || *backup.VolumeSnapshotName != ref.VolumeSnapshotRef.Name || backup.PersistentVolumeClaim.UID == "" {
-		return "", "", resourceFailure("ResourceConflict", "Root snapshot origin is missing")
+		return "", nil, resourceFailure("ResourceConflict", "Root snapshot origin is missing")
 	}
-	return *backup.VolumeSnapshotName, backup.PersistentVolumeClaim.UID, nil
+	return *backup.VolumeSnapshotName, &backup.PersistentVolumeClaim, nil
 }
 
 func snapshotConditionFailed(conditions []snapshotv1.Condition) bool {

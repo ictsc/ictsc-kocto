@@ -1,5 +1,18 @@
 # Cephでの差分クローン検証
 
+Filesystem用の`kocto-ceph-rbd`を残したまま、Block用の`kocto-ceph-rbd-block`を追加しています。両方で同じCeph poolとSecret、VolumeSnapshotClass `kocto-ceph-rbd`を使います。同じCSI driverに対する既定SnapshotClassを増やさず、保存元PVCのvolumeModeで区別します。Block用StorageProfileはBlock/RWO、cloneStrategyはsnapshotです。
+
+Problemで次のように指定すると、managerの既定Filesystemクラスを使わず、BlockのDataVolume/PVCから作問VMを起動します。既存のProblem/PVCの接続方法は変えません。
+
+```yaml
+spec:
+  storage:
+    storageClassName: kocto-ceph-rbd-block
+    volumeMode: Block
+```
+
+FilesystemはPVC内のdisk.img、BlockはPVCのブロックデバイスをKubeVirtがゲストへ接続します。どちらも保存/復元は標準のPVC/VolumeSnapshotとKubeVirt Snapshot/Clone/Restoreで行います。Ceph専用のコピー処理はcontrollerへ追加していません。BlockではFilesystem用の余裕を加えませんが、Ceph-CSIの容量丸めは残ります。1GiBのようなGiB単位の要求で、作問VMと全チームの/sys/class/block/vda/sizeを実測して一致を確認します。
+
 検証クラスタのPVCは、Proxmox上のCephへ直接接続します。TalosのVMディスクは従来のLVMに置いたままです。Ceph-CSIは上流のv3.18.1を使い、ドライバやProblem/ProblemChallengeのコードにはストレージ固有の変更を加えていません。
 
 | 項目 | 設定 |

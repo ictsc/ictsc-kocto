@@ -57,6 +57,10 @@ func problemDataVolume(problem *labv1alpha1.Problem, storageClass string) *cdiv1
 	// 作問VMの復旧ではこのイメージを再取り込みせず、作問内容が入った同じPVCを使う。
 	url := "docker://" + problem.Spec.Machine.Image.ContainerDisk
 	mode := corev1.PersistentVolumeFilesystem
+	if problem.Spec.Storage != nil {
+		storageClass = problem.Spec.Storage.StorageClassName
+		mode = problem.Spec.Storage.VolumeMode
+	}
 	return &cdiv1.DataVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: problem.Namespace, Labels: problemLabels(problem)},
 		Spec: cdiv1.DataVolumeSpec{
@@ -75,6 +79,14 @@ func problemDataVolume(problem *labv1alpha1.Problem, storageClass string) *cdiv1
 			},
 		},
 	}
+}
+
+// Kubernetesでは省略したvolumeModeはFilesystemとして扱う。古いPVCの照合にも使う。
+func pvcVolumeMode(spec corev1.PersistentVolumeClaimSpec) corev1.PersistentVolumeMode {
+	if spec.VolumeMode == nil {
+		return corev1.PersistentVolumeFilesystem
+	}
+	return *spec.VolumeMode
 }
 
 // problemVirtualMachineは、ProblemのCPU/メモリと取り込み済みPVCを使うVMの定義を組み立てる。

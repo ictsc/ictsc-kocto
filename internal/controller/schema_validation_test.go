@@ -19,6 +19,7 @@ package controller
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -62,6 +63,52 @@ var _ = Describe("API transition validation", func() {
 		}
 		Expect(k8sClient.Status().Update(ctx, problem)).To(Succeed())
 	}
+
+	DescribeTable("validates explicit storage on creation",
+		func(storage map[string]any, accepted bool) {
+			object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(newProblem())
+			Expect(err).NotTo(HaveOccurred())
+			p := &unstructured.Unstructured{Object: object}
+			p.SetGroupVersionKind(labv1alpha1.GroupVersion.WithKind("Problem"))
+			Expect(unstructured.SetNestedMap(p.Object, storage, "spec", "storage")).To(Succeed())
+			err = k8sClient.Create(ctx, p)
+			if accepted {
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() { Expect(k8sClient.Delete(ctx, p)).To(Succeed()) })
+			} else {
+				Expect(apierrors.IsInvalid(err)).To(BeTrue(), "creation error: %v", err)
+			}
+		},
+		Entry("Filesystem", map[string]any{"storageClassName": "test.filesystem", "volumeMode": "Filesystem"}, true),
+		Entry("Block", map[string]any{"storageClassName": "test-block", "volumeMode": "Block"}, true),
+		Entry("missing class", map[string]any{"volumeMode": "Block"}, false),
+		Entry("empty class", map[string]any{"storageClassName": "", "volumeMode": "Block"}, false),
+		Entry("invalid class", map[string]any{"storageClassName": "Invalid/Class", "volumeMode": "Block"}, false),
+		Entry("missing mode", map[string]any{"storageClassName": "test"}, false),
+		Entry("unknown mode", map[string]any{"storageClassName": "test", "volumeMode": "Raw"}, false),
+	)
+
+	DescribeTable("keeps storage immutable across Problem updates",
+		func(explicit bool, change func(*labv1alpha1.ProblemSpec)) {
+			p := newProblem()
+			if explicit {
+				p.Spec.Storage = &labv1alpha1.ProblemStorageSpec{StorageClassName: "test", VolumeMode: corev1.PersistentVolumeBlock}
+			}
+			Expect(k8sClient.Create(ctx, p)).To(Succeed())
+			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, p)).To(Succeed()) })
+			// Other fields remain editable, including legacy Problems without storage.
+			p.Spec.Machine.CPU = 2
+			Expect(k8sClient.Update(ctx, p)).To(Succeed())
+			change(&p.Spec)
+			Expect(apierrors.IsInvalid(k8sClient.Update(ctx, p))).To(BeTrue())
+		},
+		Entry("class", true, func(s *labv1alpha1.ProblemSpec) { s.Storage.StorageClassName = "other" }),
+		Entry("mode", true, func(s *labv1alpha1.ProblemSpec) { s.Storage.VolumeMode = corev1.PersistentVolumeFilesystem }),
+		Entry("removal", true, func(s *labv1alpha1.ProblemSpec) { s.Storage = nil }),
+		Entry("legacy addition", false, func(s *labv1alpha1.ProblemSpec) {
+			s.Storage = &labv1alpha1.ProblemStorageSpec{StorageClassName: "test", VolumeMode: corev1.PersistentVolumeBlock}
+		}),
+	)
 
 	DescribeTable("validates memory and disk quantities on creation",
 		func(field string, value any, accepted bool) {

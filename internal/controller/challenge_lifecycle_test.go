@@ -189,6 +189,45 @@ func (f *challengeFixture) bootTeams() {
 }
 
 var _ = Describe("Challenge lifecycle", func() {
+	DescribeTable("restores and verifies the saved PVC storage rather than the manager default",
+		func(mode corev1.PersistentVolumeMode) {
+			f := newChallengeFixture()
+			pvc := &corev1.PersistentVolumeClaim{}
+			Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.disk()), pvc)).To(Succeed())
+			pvc.Spec.StorageClassName = ptr.To("saved-class")
+			pvc.Spec.VolumeMode = &mode
+			Expect(f.client.Update(ctx, pvc)).To(Succeed())
+			f.problemFixture.reconciler.StorageClass = "unrelated-current-default"
+			f.bootTeams()
+			Expect(apiMeta.IsStatusConditionTrue(f.challenge.Status.Conditions, "Ready")).To(BeTrue())
+			for _, team := range f.challenge.Status.Teams {
+				Expect(f.client.Get(ctx, types.NamespacedName{Name: team.PVCRef.Name, Namespace: "default"}, pvc)).To(Succeed())
+				Expect(*pvc.Spec.StorageClassName).To(Equal("saved-class"))
+				Expect(*pvc.Spec.VolumeMode).To(Equal(mode))
+			}
+		},
+		Entry("Filesystem", corev1.PersistentVolumeFilesystem),
+		Entry("Block", corev1.PersistentVolumeBlock),
+	)
+
+	DescribeTable("rejects a restored PVC whose storage differs from the snapshot",
+		func(change func(*corev1.PersistentVolumeClaimSpec)) {
+			f := newChallengeFixture()
+			f.quiesce()
+			f.finishSnapshot()
+			vm := f.finishClone("a")
+			_, _, name := challengeTeamNames(f.challenge, "a")
+			pvc := &corev1.PersistentVolumeClaim{}
+			Expect(f.client.Get(ctx, types.NamespacedName{Name: name, Namespace: "default"}, pvc)).To(Succeed())
+			change(&pvc.Spec)
+			Expect(f.client.Update(ctx, pvc)).To(Succeed())
+			f.reconcileChallenge()
+			Expect(f.starts[vm.Name]).To(BeZero())
+			Expect(apiMeta.FindStatusCondition(f.challenge.Status.Teams[0].Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		},
+		Entry("class", func(s *corev1.PersistentVolumeClaimSpec) { s.StorageClassName = ptr.To("wrong-class") }),
+		Entry("mode", func(s *corev1.PersistentVolumeClaimSpec) { s.VolumeMode = ptr.To(corev1.PersistentVolumeBlock) }),
+	)
 	It("locks the source, saves one snapshot and starts independent Manual VMs only once", func() {
 		f := newChallengeFixture()
 		f.bootTeams()

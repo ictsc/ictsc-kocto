@@ -78,7 +78,7 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.StringVar(&storageClass, "storage-class", "", "Required StorageClass for author disks; use Filesystem/RWO with Immediate binding.")
+	flag.StringVar(&storageClass, "storage-class", "", "Fallback StorageClass for Problems without spec.storage; initial disks use Filesystem/RWO. Explicit Problem storage supports Filesystem or Block with Immediate binding.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")

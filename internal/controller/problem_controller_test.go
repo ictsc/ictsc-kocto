@@ -92,6 +92,8 @@ var _ = Describe("Problem Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance Problem")
+			resource.Finalizers = nil
+			Expect(k8sClient.Update(ctx, resource)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {

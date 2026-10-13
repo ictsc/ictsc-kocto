@@ -146,11 +146,38 @@ spec:
                 - repository
                 - topologyFile
                 type: object
+              storage:
+                description: |-
+                  Storageは初回取り込み先を指定する。省略時はmanagerのStorageClassとFilesystemを使う。
+                  既存Problemへの後付けや削除は禁止し、作問済みのディスクを別の構成へ切り替えない。
+                properties:
+                  storageClassName:
+                    description: StorageClassNameは初回取り込み先のStorageClass名を指定する。
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                  volumeMode:
+                    description: VolumeModeはFilesystemまたはBlockを指定する。作成後に変換しない。
+                    enum:
+                    - Filesystem
+                    - Block
+                    type: string
+                required:
+                - storageClassName
+                - volumeMode
+                type: object
+                x-kubernetes-validations:
+                - message: storage is immutable
+                  rule: self == oldSelf
             required:
             - access
             - machine
             - source
             type: object
+            x-kubernetes-validations:
+            - message: storage cannot be added or removed after Problem creation
+              rule: has(self.storage) == has(oldSelf.storage)
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。
             properties:

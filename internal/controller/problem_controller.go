@@ -47,7 +47,7 @@ type ProblemReconciler struct {
 	// APIReaderはキャッシュを通さずに読むためのClient、SchemeはAPI型とownerReferenceの対応に使う。
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
-	// StorageClassは初回取り込み先のPVCに指定する。managerの起動引数から受け取る。
+	// StorageClassはstorageを省略したProblemの初回取り込みにだけ使う互換用の既定値。
 	StorageClass string
 }
 
@@ -77,9 +77,6 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	problem := &labv1alpha1.Problem{}
 	if err := r.reader().Get(ctx, req.NamespacedName, problem); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
-	if r.StorageClass == "" {
-		return r.problemState(ctx, problem, "StorageClassRequired", "Configure --storage-class before provisioning", false, false, nil, nil)
 	}
 	if !problem.DeletionTimestamp.IsZero() {
 		// DELETE要求を受けたProblemは起動処理へ進めず、子リソースの片付けへ回す。
@@ -123,6 +120,10 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
+		// 既定値が必要なのは初回だけ。既存ディスクの復旧/停止/削除にはmanager設定を使わない。
+		if problem.Spec.Storage == nil && r.StorageClass == "" {
+			return r.problemState(ctx, problem, "StorageClassRequired", "Specify spec.storage or configure --storage-class before provisioning", false, false, nil, nil)
+		}
 		dv = problemDataVolume(problem, r.StorageClass)
 		// Problemを所有者にすることで、GCとOwnsによる変更通知の対象にする。
 		if err := controllerutil.SetControllerReference(problem, dv, r.Scheme); err != nil {
@@ -161,6 +162,10 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	if !ownedByDataVolume(pvc, dv.UID) {
 		return r.problemState(ctx, problem, "ResourceConflict", "Root PVC does not belong to the author DataVolume", false, false, nil, diskRef)
+	}
+	// 明示指定との不一致は変換や再作成で補わない。旧Problemは実際のPVCをそのまま使う。
+	if storage := problem.Spec.Storage; storage != nil && (pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != storage.StorageClassName || pvcVolumeMode(pvc.Spec) != storage.VolumeMode) {
+		return r.problemState(ctx, problem, "ResourceConflict", "Author PVC storage does not match the immutable Problem storage", false, false, nil, diskRef)
 	}
 	// CDIの取り込み完了とPVCの割り当てを両方確認するまで、VMにはディスクを接続しない。
 	if dv.Status.Phase != cdiv1.Succeeded || pvc.Status.Phase != corev1.ClaimBound || !pvc.DeletionTimestamp.IsZero() {
@@ -505,9 +510,6 @@ func (r *ProblemReconciler) problemEvents(ctx context.Context, object client.Obj
 
 // SetupWithManagerは、Problemと関連リソースの監視をmanagerへ登録する。
 func (r *ProblemReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if r.StorageClass == "" {
-		return fmt.Errorf("--storage-class is required")
-	}
 	// VMとDataVolumeはProblemの直接の子なのでOwnsで通知できる。
 	// VMI/Pod/PVCは直接の子ではないため、WatchesとproblemEventsでProblemへ結び付ける。
 	return ctrl.NewControllerManagedBy(mgr).

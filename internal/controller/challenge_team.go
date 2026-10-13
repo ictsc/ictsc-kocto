@@ -196,11 +196,11 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 // 元の作問PVCや他チームのPVCは採用しない。GCだけに頼らず、UIDを記録して削除時にも確認する。
 func (r *ProblemChallengeReconciler) adoptTeamPVC(ctx context.Context, c *labv1alpha1.ProblemChallenge, team *labv1alpha1.ProblemChallengeTeamStatus, pvc *corev1.PersistentVolumeClaim) error {
 	_, vmName, pvcName := challengeTeamNames(c, team.ID)
-	snapshotName, sourceUID, err := r.rootSnapshot(ctx, c)
+	snapshotName, sourcePVC, err := r.rootSnapshot(ctx, c)
 	if err != nil {
 		return err
 	}
-	if pvc.Name != pvcName || pvc.UID == sourceUID || (team.PVCRef != nil && team.PVCRef.UID != pvc.UID) {
+	if pvc.Name != pvcName || pvc.UID == sourcePVC.UID || (team.PVCRef != nil && team.PVCRef.UID != pvc.UID) {
 		return resourceFailure("ResourceConflict", "Team PVC identity does not match")
 	}
 	matches := pvc.Spec.DataSource != nil && pvc.Spec.DataSource.APIGroup != nil && *pvc.Spec.DataSource.APIGroup == "snapshot.storage.k8s.io" && pvc.Spec.DataSource.Kind == "VolumeSnapshot" && pvc.Spec.DataSource.Name == snapshotName
@@ -210,6 +210,11 @@ func (r *ProblemChallengeReconciler) adoptTeamPVC(ctx context.Context, c *labv1a
 	}
 	if !matches {
 		return resourceFailure("ResourceConflict", "Team PVC was not restored from this root snapshot")
+	}
+	// PVCの生成はKubeVirt Restoreへ委ねる。保存元と異なるclass/modeを採用して起動しない。
+	// 元のPVCが停止後に読めなくなっても、保存済みの設定から検証できる。
+	if !equality.Semantic.DeepEqual(pvc.Spec.StorageClassName, sourcePVC.Spec.StorageClassName) || pvcVolumeMode(pvc.Spec) != pvcVolumeMode(sourcePVC.Spec) {
+		return resourceFailure("ResourceConflict", "Team PVC storage does not match the saved source PVC")
 	}
 	for _, other := range c.Status.Teams {
 		if other.ID != team.ID && other.PVCRef != nil && other.PVCRef.UID == pvc.UID {

@@ -102,6 +102,7 @@ func (f *problemFixture) finishImport() *corev1.PersistentVolumeClaim {
 	Expect(f.client.Status().Update(ctx, dv)).To(Succeed())
 	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: dv.Name, Namespace: dv.Namespace,
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: cdiv1.SchemeGroupVersion.String(), Kind: "DataVolume", Name: dv.Name, UID: dv.UID}}},
+		Spec:   corev1.PersistentVolumeClaimSpec{StorageClassName: dv.Spec.Storage.StorageClassName, VolumeMode: dv.Spec.Storage.VolumeMode, AccessModes: dv.Spec.Storage.AccessModes},
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
 	Expect(f.client.Create(ctx, pvc)).To(Succeed())
 	return pvc
@@ -132,6 +133,62 @@ func (f *problemFixture) instanceAndPod() (*virtv1.VirtualMachineInstance, *core
 }
 
 var _ = Describe("Author VM lifecycle", func() {
+	DescribeTable("provisions explicit storage without a manager default and preserves it on recovery",
+		func(mode corev1.PersistentVolumeMode) {
+			f := newProblemFixture()
+			f.problem.Spec.Storage = &labv1alpha1.ProblemStorageSpec{StorageClassName: "per-problem", VolumeMode: mode}
+			Expect(f.client.Update(ctx, f.problem)).To(Succeed())
+			f.reconciler.StorageClass = ""
+			pvc := f.boot()
+			dv := f.disk()
+			Expect(*dv.Spec.Storage.StorageClassName).To(Equal("per-problem"))
+			Expect(*dv.Spec.Storage.VolumeMode).To(Equal(mode))
+			Expect(*pvc.Spec.VolumeMode).To(Equal(mode))
+			f.reconciler.StorageClass = "different-default"
+			Expect(f.client.Delete(ctx, f.vm())).To(Succeed())
+			f.reconcile()
+			Expect(f.disk().UID).To(Equal(dv.UID))
+			stored := &corev1.PersistentVolumeClaim{}
+			Expect(f.client.Get(ctx, client.ObjectKeyFromObject(pvc), stored)).To(Succeed())
+			Expect(stored.UID).To(Equal(pvc.UID))
+			Expect(*stored.Spec.StorageClassName).To(Equal("per-problem"))
+			Expect(*stored.Spec.VolumeMode).To(Equal(mode))
+		},
+		Entry("Filesystem", corev1.PersistentVolumeFilesystem),
+		Entry("Block", corev1.PersistentVolumeBlock),
+	)
+
+	It("resumes legacy disks even when the manager default changes or disappears", func() {
+		f := newProblemFixture()
+		pvc := f.boot()
+		for _, fallback := range []string{"other", ""} {
+			f.reconciler.StorageClass = fallback
+			Expect(f.client.Delete(ctx, f.vm())).To(Succeed())
+			f.reconcile()
+			Expect(f.vm().Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal(pvc.Name))
+			stored := &corev1.PersistentVolumeClaim{}
+			Expect(f.client.Get(ctx, client.ObjectKeyFromObject(pvc), stored)).To(Succeed())
+			Expect(stored.UID).To(Equal(pvc.UID))
+			Expect(*stored.Spec.StorageClassName).To(Equal("test-immediate"))
+			Expect(pvcVolumeMode(stored.Spec)).To(Equal(corev1.PersistentVolumeFilesystem))
+		}
+	})
+
+	It("refuses a mismatched author disk without converting or recreating it", func() {
+		f := newProblemFixture()
+		f.problem.Spec.Storage = &labv1alpha1.ProblemStorageSpec{StorageClassName: "per-problem", VolumeMode: corev1.PersistentVolumeBlock}
+		Expect(f.client.Update(ctx, f.problem)).To(Succeed())
+		f.reconcile()
+		pvc := f.finishImport()
+		mode := corev1.PersistentVolumeFilesystem
+		pvc.Spec.VolumeMode = &mode
+		Expect(f.client.Update(ctx, pvc)).To(Succeed())
+		f.reconcile()
+		Expect(apiMeta.FindStatusCondition(f.problem.Status.Conditions, "VMReady").Reason).To(Equal("ResourceConflict"))
+		Expect(f.disk().UID).To(Equal(f.problem.Status.DiskRef.UID))
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(pvc), pvc)).To(Succeed())
+		Expect(*pvc.Spec.VolumeMode).To(Equal(corev1.PersistentVolumeFilesystem))
+	})
 	It("creates author resources through the pinned API schemas and resumes after a controller restart", func() {
 		problem := &labv1alpha1.Problem{
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "author-api-", Namespace: "default"},

@@ -1,5 +1,18 @@
 # 検証クラスタの永続ディスク
 
+Problemごとに`spec.storage.storageClassName`と`spec.storage.volumeMode`を指定できます。volumeModeはFilesystemとBlockに対応し、初回取り込み時だけ使います。両方の指定が必要で、storage全体の変更/追加/削除はProblem作成後に禁止します。既存Problemのstorage省略は有効なままです。省略した新規Problemはmanagerの`--storage-class`とFilesystemを使い、既定値も指定もない場合はStorageClassRequiredで取り込みを待ちます。
+
+既存のDataVolume/PVCがある場合、現在のmanager設定で保存先やmodeを変えたり再作成したりしません。初回取り込みを完了したディスクの喪失を再取り込みで埋める処理もありません。出題用のPVCはKubeVirt Snapshot/Clone/Restoreが保存元のStorageClassとvolumeModeで復元します。controllerはSnapshotに保存されたPVCと照合してから採用し、不一致を変換や再作成で修正しません。ロックと停止確認、UIDによる所有確認、削除順序、作問VMのAlways/競技VMのManualによる復旧方針は維持しています。
+
+```yaml
+spec:
+  storage:
+    storageClassName: kocto-ceph-rbd-block
+    volumeMode: Block
+```
+
+Cephの設定は[CephのREADME](ceph/README.md)、A220用の未検証テンプレートとTalosの準備は[A220のREADME](a220/README.md)にあります。FilesystemにはCDIやファイルの管理情報用の余裕、Blockにはストレージ側の容量丸めがあるため、要求量とゲストから見える容量は実測します。PVCに表示される容量だけで容量一致を判断しません。
+
 現在の検証ではProxmox上のCephと標準のCeph-CSIを使います。構成と検証手順は[CephのREADME](ceph/README.md)にあります。以下のHostpath構成は以前のreflink検証用として残しています。
 
 単一ノードのTalos検証クラスタで使うHostpath構成です。CDI v1.64.0、CSI Hostpath Driver v1.18.0にreflink対応の変更を加えたイメージ、external-snapshotter v8.6.0を使用します。KubeVirt v1.9.0は導入済みであることを前提にしています。

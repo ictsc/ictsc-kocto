@@ -1,0 +1,26 @@
+# 未検証。CSI driverやbackendは別途配置する。BlockにはfsTypeを指定しない。
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kocto-a220-san-block
+provisioner: csi.trident.netapp.io
+parameters:
+  backendType: ontap-san
+  storagePools: "a220-san:.*"
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kocto-a220-nas
+provisioner: csi.trident.netapp.io
+parameters:
+  backendType: ontap-nas
+  storagePools: "a220-nas:.*"
+mountOptions:
+  - nfsvers=4.1
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true

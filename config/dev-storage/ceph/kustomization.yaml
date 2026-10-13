@@ -4,7 +4,9 @@ namespace: kocto-ceph-storage
 resources:
   - namespace.yaml
   - storageclass.yaml
+  - storageclass-block.yaml
   - storageprofile.yaml
+  - storageprofile-block.yaml
   - https://raw.githubusercontent.com/ceph/ceph-csi/v3.18.1/deploy/rbd/kubernetes/csidriver.yaml
   - https://raw.githubusercontent.com/ceph/ceph-csi/v3.18.1/deploy/rbd/kubernetes/csi-provisioner-rbac.yaml
   - https://raw.githubusercontent.com/ceph/ceph-csi/v3.18.1/deploy/rbd/kubernetes/csi-nodeplugin-rbac.yaml

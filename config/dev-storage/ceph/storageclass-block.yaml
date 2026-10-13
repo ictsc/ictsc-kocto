@@ -1,0 +1,19 @@
+# BlockのPVCを接続する。Filesystem用クラスと同じCeph/Secret/SnapshotClassを使う。
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: kocto-ceph-rbd-block
+provisioner: rbd.csi.ceph.com
+parameters:
+  clusterID: 6e69baff-8661-46bd-a631-5c6f4a97af12
+  pool: kocto-dev
+  imageFeatures: layering,exclusive-lock,object-map,fast-diff,deep-flatten
+  csi.storage.k8s.io/provisioner-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/provisioner-secret-namespace: kocto-ceph-storage
+  csi.storage.k8s.io/controller-expand-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/controller-expand-secret-namespace: kocto-ceph-storage
+  csi.storage.k8s.io/node-stage-secret-name: kocto-ceph-rbd
+  csi.storage.k8s.io/node-stage-secret-namespace: kocto-ceph-storage
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: Immediate

@@ -1,0 +1,24 @@
+# 検証用namespaceを別途作成してから適用する。GitOpsの基盤配置には含めない。
+apiVersion: lab.icttoracon.net/v1alpha1
+kind: Problem
+metadata:
+  name: author
+  namespace: kocto-ceph-block-verify
+spec:
+  source:
+    repository: https://github.com/ictsc/ictsc-kocto.git
+    commitHash: REPLACE_SOURCE_COMMIT
+    topologyFile: topology.yaml
+  storage:
+    storageClassName: kocto-ceph-rbd-block
+    volumeMode: Block
+  machine:
+    cpu: 1
+    memory: 128Mi
+    disk: 1Gi
+    image:
+      containerDisk: quay.io/kubevirt/cirros-container-disk-demo@sha256:9d36bdd2b8f86e37058a58be47f82c9e94e2741df8fc8144cecf80fd953c8643
+  access:
+    - name: console
+      node: author
+      interface: eth0

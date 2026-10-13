@@ -1,0 +1,9 @@
+# 未検証。Talos v1.14.2用Image Factory schematicの入力例。
+# installerイメージはそのTalosリリースで利用できる拡張の組み合わせから生成する。
+customization:
+  systemExtensions:
+    officialExtensions:
+      - siderolabs/iscsi-tools
+      - siderolabs/multipath-tools
+      - siderolabs/trident-iscsi-tools
+      - siderolabs/util-linux-tools
