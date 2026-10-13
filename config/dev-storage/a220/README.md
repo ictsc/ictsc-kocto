@@ -15,6 +15,8 @@ backendのdefaultsにはspaceReserve=noneとsplitOnClone=falseを指定してい
 
 資格情報の例は`credentials.yaml.example`にあり、実際の値は入れていません。値を入力したコピーはGit管理外に置き、SecretとしてTridentのnamespaceへ適用します。TridentBackendConfigにはSecretの名前だけを指定します。SAN/NASが別のSVMを使う場合は、各backendのSecretも分けてください。ここではCHAPを有効にする例までは含めていません。CHAPを使う場合は公式資料に従って双方向の資格情報を別途用意します。[Secretによるbackend認証](https://docs.netapp.com/us-en/trident/trident-use/backend-kubectl.html)
 
+SAN/Blockで非rootのCDI/KubeVirtがdeviceを開くためのcontainerd設定については[CephのREADME](../ceph/README.md)も参照してください。iSCSI/multipathの拡張とは別のruntimeの前提です。Cephで使う文書をA220に無条件に適用するのではなく、そのノードでのcontainerdの設定を確認します。
+
 ## Talosの準備
 
 現在のTalos v1.14.2を想定した例です。Linuxのapt/systemctl手順をTalosで実行する方法ではありません。Image Factoryで、そのTalosリリースに合う次のSystem Extensionを含めたinstallerを作ります。`talos-schematic.yaml.example`が入力例です。既存の拡張がある場合は置き換えずに追加します。
