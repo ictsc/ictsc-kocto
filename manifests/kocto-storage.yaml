@@ -814,7 +814,7 @@ spec:
             fieldRef:
               apiVersion: v1
               fieldPath: spec.nodeName
-        image: ghcr.io/ictsc/ictsc-kocto:storage-b3ad3616ba31e9746e0af737ae62eaeb541d728b
+        image: ghcr.io/ictsc/ictsc-kocto:storage-cd0faf095dd4dddd0f6d167d3b1941af807ea86c
         livenessProbe:
           failureThreshold: 5
           httpGet:

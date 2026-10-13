@@ -1120,10 +1120,10 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
-        - --storage-class=kocto-hostpath
+        - --storage-class=kocto-ceph-rbd
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:b3ad3616ba31e9746e0af737ae62eaeb541d728b
+        image: ghcr.io/ictsc/ictsc-kocto:cd0faf095dd4dddd0f6d167d3b1941af807ea86c
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
