@@ -63,7 +63,7 @@ func newProblemFixture() *problemFixture {
 		}},
 	}
 	created := 0
-	// These tests use plain updates. The default managed-fields tracker cannot reflect KubeVirt VMI uint64 fields.
+	// managed-fieldsの追跡処理がKubeVirt VMIのuint64フィールドを扱えないため、通常のUpdateで検証する。
 	cl := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjectTracker(k8stesting.NewObjectTracker(scheme, serializer.NewCodecFactory(scheme).UniversalDecoder())).WithObjects(problem).
 		WithStatusSubresource(&labv1alpha1.Problem{}, &cdiv1.DataVolume{}, &virtv1.VirtualMachine{}, &corev1.PersistentVolumeClaim{}).

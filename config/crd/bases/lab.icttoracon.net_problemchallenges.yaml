@@ -90,7 +90,7 @@ spec:
             - teams
             type: object
             x-kubernetes-validations:
-            - message: ProblemChallenge spec is immutable
+            - message: ProblemChallengeのspecは変更できません
               rule: self == oldSelf
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。

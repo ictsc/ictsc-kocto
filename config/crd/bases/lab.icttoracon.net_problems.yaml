@@ -80,10 +80,9 @@ spec:
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                     x-kubernetes-validations:
-                    - message: machine.disk must be a valid quantity greater than
-                        zero
+                    - message: machine.diskは有効なQuantityで0より大きい値にしてください
                       rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
-                    - message: machine.disk is immutable
+                    - message: machine.diskは変更できません
                       rule: self == oldSelf
                   image:
                     description: |-
@@ -98,7 +97,7 @@ spec:
                     - containerDisk
                     type: object
                     x-kubernetes-validations:
-                    - message: machine.image is immutable
+                    - message: machine.imageは変更できません
                       rule: self == oldSelf
                   memory:
                     anyOf:
@@ -110,8 +109,7 @@ spec:
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                     x-kubernetes-validations:
-                    - message: machine.memory must be a valid quantity greater than
-                        zero
+                    - message: machine.memoryは有効なQuantityで0より大きい値にしてください
                       rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
                   memoryBalloon:
                     description: MemoryBalloonはvirtio-balloonの有効/無効と、ゲスト量と配置要求量を指定する。
@@ -127,8 +125,7 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                         x-kubernetes-validations:
-                        - message: memoryBalloon.max must be a valid quantity greater
-                            than zero
+                        - message: memoryBalloon.maxは有効なQuantityで0より大きい値にしてください
                           rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
                       min:
                         anyOf:
@@ -138,18 +135,16 @@ spec:
                         pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                         x-kubernetes-int-or-string: true
                         x-kubernetes-validations:
-                        - message: memoryBalloon.min must be a valid quantity greater
-                            than zero
+                        - message: memoryBalloon.minは有効なQuantityで0より大きい値にしてください
                           rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
                     required:
                     - enabled
                     type: object
                     x-kubernetes-validations:
-                    - message: memoryBalloon requires min and max when enabled and
-                        forbids them when disabled
+                    - message: memoryBalloonが有効な場合はminとmaxが必須で、無効な場合は指定できません
                       rule: 'self.enabled ? has(self.min) && has(self.max) : !has(self.min)
                         && !has(self.max)'
-                    - message: memoryBalloon.min must not exceed max
+                    - message: memoryBalloon.minはmax以下にしてください
                       rule: '!has(self.min) || !has(self.max) || !isQuantity(string(self.min))
                         || !isQuantity(string(self.max)) || !quantity(string(self.min)).isGreaterThan(quantity(string(self.max)))'
                 required:
@@ -158,8 +153,7 @@ spec:
                 - image
                 type: object
                 x-kubernetes-validations:
-                - message: machine.memory is required unless memoryBalloon is enabled
-                    and must be omitted when enabled
+                - message: memoryBalloonが有効な場合はmemoryを省略し、それ以外はmemoryが必須です
                   rule: 'has(self.memoryBalloon) && self.memoryBalloon.enabled ? !has(self.memory)
                     : has(self.memory)'
               source:
@@ -213,7 +207,7 @@ spec:
                 - volumeMode
                 type: object
                 x-kubernetes-validations:
-                - message: storage is immutable
+                - message: storageは変更できません
                   rule: self == oldSelf
             required:
             - access
@@ -221,7 +215,7 @@ spec:
             - source
             type: object
             x-kubernetes-validations:
-            - message: storage cannot be added or removed after Problem creation
+            - message: storageはProblemの作成後に追加や削除ができません
               rule: has(self.storage) == has(oldSelf.storage)
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。
@@ -343,7 +337,7 @@ spec:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: Problem spec cannot change while locked by a Challenge
+        - message: ProblemのspecはChallengeによるロック中は変更できません
           rule: '!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec
             == oldSelf.spec'
     served: true

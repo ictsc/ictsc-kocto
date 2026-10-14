@@ -69,7 +69,7 @@ var _ = Describe("ProblemChallenge Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
+			// テストで作成したProblemChallengeを削除する。
 			resource := &labv1alpha1.ProblemChallenge{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -88,8 +88,8 @@ var _ = Describe("ProblemChallenge Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			// Reconcile後の状態を確認する。
+			// 必要なstatus条件はここで検証する。
 		})
 
 		It("rejects an empty Problem reference name", func() {

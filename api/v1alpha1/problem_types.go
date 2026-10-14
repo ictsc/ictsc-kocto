@@ -28,7 +28,7 @@ import (
 // フィールドを追加するときはJSONタグも指定してください。
 
 // ProblemSpecはProblemに指定する内容を表します。
-// +kubebuilder:validation:XValidation:rule="has(self.storage) == has(oldSelf.storage)",message="storage cannot be added or removed after Problem creation"
+// +kubebuilder:validation:XValidation:rule="has(self.storage) == has(oldSelf.storage)",message="storageはProblemの作成後に追加や削除ができません"
 type ProblemSpec struct {
 	// 作問者が指定するフィールドをここに追加します。
 	// 型を変更したらmake manifestsとmake generateを実行してください。
@@ -44,7 +44,7 @@ type ProblemSpec struct {
 
 	// Storageは初回取り込み先を指定する。省略時はmanagerのStorageClassとFilesystemを使う。
 	// 既存Problemへの後付けや削除は禁止し、作問済みのディスクを別の構成へ切り替えない。
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storage is immutable"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageは変更できません"
 	// +optional
 	Storage *ProblemStorageSpec `json:"storage,omitempty"`
 
@@ -97,7 +97,10 @@ type ProblemSourceSpec struct {
 }
 
 // ProblemMachineSpecは、問題環境を動かすVMのスペックを表します。
-// +kubebuilder:validation:XValidation:rule="has(self.memoryBalloon) && self.memoryBalloon.enabled ? !has(self.memory) : has(self.memory)",message="machine.memory is required unless memoryBalloon is enabled and must be omitted when enabled"
+// Memoryか、有効なMemoryBalloonの範囲指定が必須。両方の省略や有効時の二重指定は拒否する。
+// 各フィールドのoptionalは単独で省略できるという意味で、以下のCELが組み合わせを検証する。
+// MemoryBalloonを無効にする場合は固定量のMemoryが必要になる。
+// +kubebuilder:validation:XValidation:rule="has(self.memoryBalloon) && self.memoryBalloon.enabled ? !has(self.memory) : has(self.memory)",message="memoryBalloonが有効な場合はmemoryを省略し、それ以外はmemoryが必須です"
 type ProblemMachineSpec struct {
 	// CPUはマシンのCPUコア数を指定する
 	// +kubebuilder:validation:Minimum=1
@@ -106,7 +109,7 @@ type ProblemMachineSpec struct {
 
 	// Memoryは固定のメモリ量を指定する。balloonを明示的に有効にする場合は省略する。
 	// 省略したmemoryBalloonは従来どおりゲスト量と要求量を揃え、デバイスの既定値も維持する。
-	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.memory must be a valid quantity greater than zero"
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.memoryは有効なQuantityで0より大きい値にしてください"
 	// +optional
 	Memory *resource.Quantity `json:"memory,omitempty"`
 
@@ -116,34 +119,34 @@ type ProblemMachineSpec struct {
 
 	// Diskは初回取り込み時のroot PVCの要求容量を指定する。
 	// 作成後は変更できない。
-	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.disk must be a valid quantity greater than zero"
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.disk is immutable"
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.diskは有効なQuantityで0より大きい値にしてください"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.diskは変更できません"
 	// +required
 	Disk resource.Quantity `json:"disk"`
 
 	// Imageは、初回取り込み元のイメージを指定する。
 	// 作成後は変更できない。
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.image is immutable"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.imageは変更できません"
 	// +required
 	Image ProblemMachineImageSpec `json:"image"`
 }
 
 // ProblemMemoryBalloonSpecのMinは配置要求量であり、実行中のballoonの下限ではない。
 // 有効時は範囲を必須にし、無効時はmachine.memoryだけで固定量を指定する。
-// +kubebuilder:validation:XValidation:rule="self.enabled ? has(self.min) && has(self.max) : !has(self.min) && !has(self.max)",message="memoryBalloon requires min and max when enabled and forbids them when disabled"
-// +kubebuilder:validation:XValidation:rule="!has(self.min) || !has(self.max) || !isQuantity(string(self.min)) || !isQuantity(string(self.max)) || !quantity(string(self.min)).isGreaterThan(quantity(string(self.max)))",message="memoryBalloon.min must not exceed max"
+// +kubebuilder:validation:XValidation:rule="self.enabled ? has(self.min) && has(self.max) : !has(self.min) && !has(self.max)",message="memoryBalloonが有効な場合はminとmaxが必須で、無効な場合は指定できません"
+// +kubebuilder:validation:XValidation:rule="!has(self.min) || !has(self.max) || !isQuantity(string(self.min)) || !isQuantity(string(self.max)) || !quantity(string(self.min)).isGreaterThan(quantity(string(self.max)))",message="memoryBalloon.minはmax以下にしてください"
 type ProblemMemoryBalloonSpec struct {
 	// Enabledはvirtio-balloonデバイスを接続するかを指定する。
 	// +required
 	Enabled bool `json:"enabled"`
 
 	// MinはKubernetesへ要求するメモリ量。KubeVirtの追加分は別に加算される。
-	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.min must be a valid quantity greater than zero"
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.minは有効なQuantityで0より大きい値にしてください"
 	// +optional
 	Min *resource.Quantity `json:"min,omitempty"`
 
 	// Maxはゲストに見せるメモリ量。memory.maxGuestによるhotplug上限ではない。
-	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.max must be a valid quantity greater than zero"
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.maxは有効なQuantityで0より大きい値にしてください"
 	// +optional
 	Max *resource.Quantity `json:"max,omitempty"`
 }
@@ -240,7 +243,7 @@ type ActiveChallengeStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec == oldSelf.spec",message="Problem spec cannot change while locked by a Challenge"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec == oldSelf.spec",message="ProblemのspecはChallengeによるロック中は変更できません"
 
 // Problemは問題環境を表すリソースです。
 type Problem struct {

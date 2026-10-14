@@ -97,7 +97,7 @@ var _ = Describe("API transition validation", func() {
 			}
 			Expect(k8sClient.Create(ctx, p)).To(Succeed())
 			DeferCleanup(func() { Expect(k8sClient.Delete(ctx, p)).To(Succeed()) })
-			// Other fields remain editable, including legacy Problems without storage.
+			// storageを省略した既存Problemも含め、他の編集可能なフィールドは変更できる。
 			p.Spec.Machine.CPU = 2
 			Expect(k8sClient.Update(ctx, p)).To(Succeed())
 			change(&p.Spec)
@@ -193,7 +193,7 @@ var _ = Describe("API transition validation", func() {
 			Enabled: true, Min: ptr.To(resource.MustParse("1Gi")), Max: ptr.To(resource.MustParse("4Gi")),
 		}
 		Expect(k8sClient.Update(ctx, p)).To(Succeed())
-		// Use the typed client too: optional fixed memory must be absent on the wire.
+		// 型付きClientでも、省略した固定量のmemoryが送信データに含まれないことを確認する。
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p), p)).To(Succeed())
 		Expect(p.Spec.Machine.Memory).To(BeNil())
 		lockProblem(p)
@@ -221,7 +221,7 @@ var _ = Describe("API transition validation", func() {
 			}
 			err := k8sClient.Update(ctx, problem)
 			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "update error: %v", err)
-			Expect(err.Error()).To(ContainSubstring("machine." + field + " must be a valid quantity greater than zero"))
+			Expect(err.Error()).To(ContainSubstring("machine." + field + "は有効なQuantityで0より大きい値にしてください"))
 		},
 		Entry("zero memory", "memory", "0"),
 		Entry("negative memory", "memory", "-1Gi"),
@@ -269,7 +269,7 @@ var _ = Describe("API transition validation", func() {
 			change(&problem.Spec)
 			err := k8sClient.Update(ctx, problem)
 			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "update error: %v", err)
-			Expect(err.Error()).To(ContainSubstring("Problem spec cannot change while locked"))
+			Expect(err.Error()).To(ContainSubstring("ProblemのspecはChallengeによるロック中は変更できません"))
 		},
 		Entry("CPU", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.CPU = 2 }),
 		Entry("memory", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.Memory = ptr.To(resource.MustParse("256Mi")) }),
@@ -315,8 +315,8 @@ var _ = Describe("API transition validation", func() {
 			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "update error: %v", err)
 			Expect(err.Error()).To(ContainSubstring(message))
 		},
-		Entry("disk", func(spec *labv1alpha1.ProblemMachineSpec) { spec.Disk = resource.MustParse("2Gi") }, "machine.disk is immutable"),
-		Entry("image", func(spec *labv1alpha1.ProblemMachineSpec) { spec.Image.ContainerDisk = "example.invalid/disk:updated" }, "machine.image is immutable"),
+		Entry("disk", func(spec *labv1alpha1.ProblemMachineSpec) { spec.Disk = resource.MustParse("2Gi") }, "machine.diskは変更できません"),
+		Entry("image", func(spec *labv1alpha1.ProblemMachineSpec) { spec.Image.ContainerDisk = "example.invalid/disk:updated" }, "machine.imageは変更できません"),
 	)
 
 	It("allows metadata and condition updates while keeping the lock", func() {
@@ -404,7 +404,7 @@ var _ = Describe("API transition validation", func() {
 			change(&challenge.Spec)
 			err := k8sClient.Update(ctx, challenge)
 			Expect(apierrors.IsInvalid(err)).To(BeTrue(), "update error: %v", err)
-			Expect(err.Error()).To(ContainSubstring("ProblemChallenge spec is immutable"))
+			Expect(err.Error()).To(ContainSubstring("ProblemChallengeのspecは変更できません"))
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(challenge), challenge)).To(Succeed())
 			Expect(challenge.Status.SourceProblem.UID).To(Equal(types.UID("problem-uid")))
 		},

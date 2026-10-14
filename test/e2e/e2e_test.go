@@ -33,24 +33,22 @@ import (
 	"github.com/ictsc/ictsc-kocto/test/utils"
 )
 
-// namespace where the project is deployed in
+// controllerを配置するnamespace。
 const namespace = "ictsc-kocto-system"
 
-// serviceAccountName created for the project
+// controllerが使うServiceAccountの名前。
 const serviceAccountName = "ictsc-kocto-controller-manager"
 
-// metricsServiceName is the name of the metrics service of the project
+// metricsServiceNameはmetricsを公開するServiceの名前。
 const metricsServiceName = "ictsc-kocto-controller-manager-metrics-service"
 
-// metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
+// metricsRoleBindingNameはmetricsの取得権限を与えるRoleBindingの名前。
 const metricsRoleBindingName = "ictsc-kocto-metrics-binding"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
+	// 実行前にnamespace、セキュリティポリシー、CRD、controllerを用意する。
 	BeforeAll(func() {
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
@@ -78,8 +76,7 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
+	// 実行後はcontroller、CRD、namespaceを削除する。
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
@@ -95,8 +92,7 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to remove controller resources")
 	})
 
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
+	// 失敗したテストでは、原因を調べるためログ、Event、Podの詳細を収集する。
 	AfterEach(func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
@@ -271,9 +267,8 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
+		// 必要に応じてサンプルCRの状態やReconcileのmetricsを確認するテストを追加する。
+		// 以下はmetricsを確認する例。
 		// metricsOutput, err := getMetricsOutput()
 		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
 		// Expect(metricsOutput).To(ContainSubstring(
@@ -283,9 +278,7 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 })
 
-// serviceAccountToken returns a token for the specified service account in the given namespace.
-// It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
-// and parsing the resulting token from the API response.
+// serviceAccountTokenはTokenRequest APIで指定のServiceAccountのトークンを取得する。
 func serviceAccountToken() (string, error) {
 	const tokenRequestRawString = `{
 		"apiVersion": "authentication.k8s.io/v1",
@@ -324,15 +317,14 @@ func serviceAccountToken() (string, error) {
 	return out, err
 }
 
-// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
+// getMetricsOutputはmetricsを取得したcurl Podの出力を返す。
 func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
 	return utils.Run(cmd)
 }
 
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
-// containing only the token field that we need to extract.
+// tokenRequestはTokenRequestの応答から、必要なトークンだけを読み取る型。
 type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`

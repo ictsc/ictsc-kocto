@@ -27,7 +27,7 @@ import (
 
 // ProblemChallengeSpecは、ある出題機会に問題環境を展開する設定を表します。
 // 作成後は変更できません。
-// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProblemChallenge spec is immutable"
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ProblemChallengeのspecは変更できません"
 type ProblemChallengeSpec struct {
 	// ProblemRefは、出題するProblemの名前を指定します。
 	// ProblemChallengeと同じnamespaceにあるProblemを参照します。

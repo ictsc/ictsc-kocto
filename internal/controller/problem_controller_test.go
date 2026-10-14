@@ -87,7 +87,7 @@ var _ = Describe("Problem Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
+			// テストで作成したProblemを削除する。
 			resource := &labv1alpha1.Problem{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -108,8 +108,8 @@ var _ = Describe("Problem Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			// Reconcile後の状態を確認する。
+			// 必要なstatus条件はここで検証する。
 			updatedProblem := &labv1alpha1.Problem{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedProblem)).To(Succeed())
 			Expect(updatedProblem.Spec.Machine.Image.ContainerDisk).To(Equal("ghcr.io/ictsc/kocto-runner:latest"))
