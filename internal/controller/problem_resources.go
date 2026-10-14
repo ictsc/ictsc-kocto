@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	virtv1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
@@ -70,7 +71,6 @@ func problemDataVolume(problem *labv1alpha1.Problem, storageClass string) *cdiv1
 			Storage: &cdiv1.StorageSpec{
 				// 作問側のHAには、障害ノード以外からも同じPVCを利用できるCSI基盤が必要。
 				// RWOだけではHAにならず、旧ノードからの安全な切り離しも基盤側で保証する。
-				// 開発用のkocto-hostpathは単一ノードの検証用であり、この前提を満たさない。
 				StorageClassName: &storageClass, VolumeMode: &mode,
 				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 				Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
@@ -104,7 +104,21 @@ func problemVirtualMachine(problem *labv1alpha1.Problem) *virtv1.VirtualMachine 
 	nic := false
 	// KubeVirtへ渡す停止猶予。ゲストのACPIシャットダウンを待ち、期限後の処理はKubeVirtに委ねる。
 	grace := int64(300)
-	memory := problem.Spec.Machine.Memory.DeepCopy()
+	// 固定量ではゲストと要求量を揃える。有効時だけMinを要求量、Maxをゲスト量に分ける。
+	// MinはPodの配置判断に使われ、balloonをMinまで膨らませる指示ではない。
+	memory, requested := resource.Quantity{}, resource.Quantity{}
+	var balloon *bool
+	if config := problem.Spec.Machine.MemoryBalloon; config != nil {
+		enabled := config.Enabled
+		balloon = &enabled
+		if enabled {
+			memory, requested = config.Max.DeepCopy(), config.Min.DeepCopy()
+		}
+	}
+	if balloon == nil || !*balloon {
+		memory = problem.Spec.Machine.Memory.DeepCopy()
+		requested = memory.DeepCopy()
+	}
 	return &virtv1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: problem.Namespace, Labels: problemLabels(problem)},
 		Spec: virtv1.VirtualMachineSpec{
@@ -119,8 +133,8 @@ func problemVirtualMachine(problem *labv1alpha1.Problem) *virtv1.VirtualMachine 
 					Domain: virtv1.DomainSpec{
 						CPU:       &virtv1.CPU{Cores: uint32(problem.Spec.Machine.CPU)},
 						Memory:    &virtv1.Memory{Guest: &memory},
-						Resources: virtv1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: memory}},
-						Devices: virtv1.Devices{AutoattachPodInterface: &nic, Disks: []virtv1.Disk{{
+						Resources: virtv1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: requested}},
+						Devices: virtv1.Devices{AutoattachPodInterface: &nic, AutoattachMemBalloon: balloon, Disks: []virtv1.Disk{{
 							Name: "root", DiskDevice: virtv1.DiskDevice{Disk: &virtv1.DiskTarget{Bus: virtv1.DiskBusVirtio}},
 						}}},
 					},

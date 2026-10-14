@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	virtv1 "kubevirt.io/api/core/v1"
 	snapshotv1 "kubevirt.io/api/snapshot/v1beta1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
@@ -66,7 +67,7 @@ var _ = Describe("Challenge API lock acquisition", func() {
 	})
 
 	It("has one winner under concurrent API updates, preserves the lock on restart, and releases it only after cleanup", func() {
-		p := &labv1alpha1.Problem{ObjectMeta: metav1.ObjectMeta{GenerateName: "challenge-source-", Namespace: "default"}, Spec: labv1alpha1.ProblemSpec{Source: labv1alpha1.ProblemSourceSpec{Repository: "https://example.invalid/problems", CommitHash: "test", TopologyFile: "topology.yaml"}, Machine: labv1alpha1.ProblemMachineSpec{CPU: 1, Memory: resource.MustParse("128Mi"), Disk: resource.MustParse("1Gi"), Image: labv1alpha1.ProblemMachineImageSpec{ContainerDisk: "example.invalid/disk:test"}}, Access: []labv1alpha1.AccessEndpoint{{Name: "console", Node: "router", Interface: "eth0"}}}}
+		p := &labv1alpha1.Problem{ObjectMeta: metav1.ObjectMeta{GenerateName: "challenge-source-", Namespace: "default"}, Spec: labv1alpha1.ProblemSpec{Source: labv1alpha1.ProblemSourceSpec{Repository: "https://example.invalid/problems", CommitHash: "test", TopologyFile: "topology.yaml"}, Machine: labv1alpha1.ProblemMachineSpec{CPU: 1, Memory: ptr.To(resource.MustParse("128Mi")), Disk: resource.MustParse("1Gi"), Image: labv1alpha1.ProblemMachineImageSpec{ContainerDisk: "example.invalid/disk:test"}}, Access: []labv1alpha1.AccessEndpoint{{Name: "console", Node: "router", Interface: "eth0"}}}}
 		Expect(k8sClient.Create(ctx, p)).To(Succeed())
 		vmName, diskName := problemResourceNames(p)
 		cleanup := []client.Object{p, &virtv1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: vmName, Namespace: p.Namespace}}, &cdiv1.DataVolume{ObjectMeta: metav1.ObjectMeta{Name: diskName, Namespace: p.Namespace}}, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: diskName, Namespace: p.Namespace}}}

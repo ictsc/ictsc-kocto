@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/utils/ptr"
 	virtv1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -57,7 +58,7 @@ func newProblemFixture() *problemFixture {
 	problem := &labv1alpha1.Problem{
 		ObjectMeta: metav1.ObjectMeta{Name: "author", Namespace: "default", UID: types.UID("problem-uid"), Generation: 1},
 		Spec: labv1alpha1.ProblemSpec{Machine: labv1alpha1.ProblemMachineSpec{
-			CPU: 1, Memory: resource.MustParse("128Mi"), Disk: resource.MustParse("1Gi"),
+			CPU: 1, Memory: ptr.To(resource.MustParse("128Mi")), Disk: resource.MustParse("1Gi"),
 			Image: labv1alpha1.ProblemMachineImageSpec{ContainerDisk: "example.invalid/disk@sha256:test"},
 		}},
 	}
@@ -133,6 +134,110 @@ func (f *problemFixture) instanceAndPod() (*virtv1.VirtualMachineInstance, *core
 }
 
 var _ = Describe("Author VM lifecycle", func() {
+	DescribeTable("creates balloon policies without changing the disk",
+		func(config *labv1alpha1.ProblemMemoryBalloonSpec, guest, request string, enabled *bool) {
+			f := newProblemFixture()
+			f.problem.Spec.Machine.Memory = ptr.To(resource.MustParse("4Gi"))
+			f.problem.Spec.Machine.MemoryBalloon = config
+			if config != nil && config.Enabled {
+				f.problem.Spec.Machine.Memory = nil
+			}
+			Expect(f.client.Update(ctx, f.problem)).To(Succeed())
+			pvc := f.boot()
+			domain := f.vm().Spec.Template.Spec.Domain
+			Expect(domain.Memory.Guest.Cmp(resource.MustParse(guest))).To(BeZero())
+			requested := domain.Resources.Requests[corev1.ResourceMemory]
+			Expect(requested.Cmp(resource.MustParse(request))).To(BeZero())
+			Expect(domain.Devices.AutoattachMemBalloon).To(Equal(enabled))
+			Expect(f.vm().Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal(pvc.Name))
+			version := f.vm().ResourceVersion
+			f.reconcile()
+			Expect(f.vm().ResourceVersion).To(Equal(version))
+		},
+		Entry("legacy default", nil, "4Gi", "4Gi", (*bool)(nil)),
+		Entry("disabled", &labv1alpha1.ProblemMemoryBalloonSpec{Enabled: false}, "4Gi", "4Gi", ptr.To(false)),
+		Entry("enabled", &labv1alpha1.ProblemMemoryBalloonSpec{
+			Enabled: true, Min: ptr.To(resource.MustParse("1Gi")), Max: ptr.To(resource.MustParse("4Gi")),
+		}, "4Gi", "1Gi", ptr.To(true)),
+	)
+
+	DescribeTable("stops the VMI and Pod before changing memory policy on the same PVC",
+		func(change func(*labv1alpha1.ProblemMachineSpec), guest, request string, enabled bool) {
+			f := newProblemFixture()
+			f.problem.Spec.Machine.Memory = nil
+			f.problem.Spec.Machine.MemoryBalloon = &labv1alpha1.ProblemMemoryBalloonSpec{
+				Enabled: true, Min: ptr.To(resource.MustParse("1Gi")), Max: ptr.To(resource.MustParse("4Gi")),
+			}
+			Expect(f.client.Update(ctx, f.problem)).To(Succeed())
+			pvc := f.boot()
+			vm := f.vm()
+			vm.Spec.Template.Spec.Domain.Resources.Requests[corev1.ResourceCPU] = resource.MustParse("100m")
+			Expect(f.client.Update(ctx, vm)).To(Succeed())
+			vmi, pod := f.instanceAndPod()
+			change(&f.problem.Spec.Machine)
+			Expect(f.client.Update(ctx, f.problem)).To(Succeed())
+			f.reconcile()
+			Expect(*f.vm().Spec.RunStrategy).To(Equal(virtv1.RunStrategyHalted))
+			requested := f.vm().Spec.Template.Spec.Domain.Resources.Requests[corev1.ResourceMemory]
+			Expect(requested.Cmp(resource.MustParse("1Gi"))).To(BeZero())
+			Expect(f.client.Delete(ctx, vmi)).To(Succeed())
+			f.reconcile()
+			Expect(*f.vm().Spec.RunStrategy).To(Equal(virtv1.RunStrategyHalted))
+			Expect(f.client.Delete(ctx, pod)).To(Succeed())
+			f.reconcile()
+			vm = f.vm()
+			Expect(*vm.Spec.RunStrategy).To(Equal(virtv1.RunStrategyAlways))
+			Expect(vm.Spec.Template.Spec.Domain.Memory.Guest.Cmp(resource.MustParse(guest))).To(BeZero())
+			requested = vm.Spec.Template.Spec.Domain.Resources.Requests[corev1.ResourceMemory]
+			Expect(requested.Cmp(resource.MustParse(request))).To(BeZero())
+			cpu := vm.Spec.Template.Spec.Domain.Resources.Requests[corev1.ResourceCPU]
+			Expect(cpu.Cmp(resource.MustParse("100m"))).To(BeZero())
+			device := vm.Spec.Template.Spec.Domain.Devices.AutoattachMemBalloon
+			Expect(device == nil || *device).To(Equal(enabled))
+			storedPVC := &corev1.PersistentVolumeClaim{}
+			Expect(f.client.Get(ctx, client.ObjectKeyFromObject(pvc), storedPVC)).To(Succeed())
+			Expect(storedPVC.UID).To(Equal(pvc.UID))
+			Expect(vm.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal(pvc.Name))
+			version := vm.ResourceVersion
+			f.reconcile()
+			Expect(f.vm().ResourceVersion).To(Equal(version))
+		},
+		Entry("request only", func(s *labv1alpha1.ProblemMachineSpec) {
+			s.MemoryBalloon.Min = ptr.To(resource.MustParse("2Gi"))
+		}, "4Gi", "2Gi", true),
+		Entry("guest only", func(s *labv1alpha1.ProblemMachineSpec) {
+			s.MemoryBalloon.Max = ptr.To(resource.MustParse("8Gi"))
+		}, "8Gi", "1Gi", true),
+		Entry("disable balloon", func(s *labv1alpha1.ProblemMachineSpec) {
+			s.MemoryBalloon = &labv1alpha1.ProblemMemoryBalloonSpec{Enabled: false}
+			s.Memory = ptr.To(resource.MustParse("4Gi"))
+		}, "4Gi", "4Gi", false),
+		Entry("return to legacy", func(s *labv1alpha1.ProblemMachineSpec) {
+			s.MemoryBalloon = nil
+			s.Memory = ptr.To(resource.MustParse("4Gi"))
+		}, "4Gi", "4Gi", true),
+	)
+
+	It("stops before disabling only the balloon device", func() {
+		f := newProblemFixture()
+		pvc := f.boot()
+		vmi, pod := f.instanceAndPod()
+		f.problem.Spec.Machine.MemoryBalloon = &labv1alpha1.ProblemMemoryBalloonSpec{Enabled: false}
+		Expect(f.client.Update(ctx, f.problem)).To(Succeed())
+		f.reconcile()
+		Expect(*f.vm().Spec.RunStrategy).To(Equal(virtv1.RunStrategyHalted))
+		Expect(f.vm().Spec.Template.Spec.Domain.Devices.AutoattachMemBalloon).To(BeNil())
+		Expect(f.client.Delete(ctx, vmi)).To(Succeed())
+		f.reconcile()
+		Expect(*f.vm().Spec.RunStrategy).To(Equal(virtv1.RunStrategyHalted))
+		Expect(f.client.Delete(ctx, pod)).To(Succeed())
+		f.reconcile()
+		vm := f.vm()
+		Expect(vm.Spec.Template.Spec.Domain.Devices.AutoattachMemBalloon).To(HaveValue(BeFalse()))
+		Expect(*vm.Spec.RunStrategy).To(Equal(virtv1.RunStrategyAlways))
+		Expect(vm.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName).To(Equal(pvc.Name))
+	})
+
 	DescribeTable("provisions explicit storage without a manager default and preserves it on recovery",
 		func(mode corev1.PersistentVolumeMode) {
 			f := newProblemFixture()
@@ -194,7 +299,7 @@ var _ = Describe("Author VM lifecycle", func() {
 			ObjectMeta: metav1.ObjectMeta{GenerateName: "author-api-", Namespace: "default"},
 			Spec: labv1alpha1.ProblemSpec{
 				Source:  labv1alpha1.ProblemSourceSpec{Repository: "https://example.invalid/problems.git", CommitHash: "test", TopologyFile: "topology.yaml"},
-				Machine: labv1alpha1.ProblemMachineSpec{CPU: 1, Memory: resource.MustParse("128Mi"), Disk: resource.MustParse("1Gi"), Image: labv1alpha1.ProblemMachineImageSpec{ContainerDisk: "example.invalid/disk:test"}},
+				Machine: labv1alpha1.ProblemMachineSpec{CPU: 1, Memory: ptr.To(resource.MustParse("128Mi")), Disk: resource.MustParse("1Gi"), Image: labv1alpha1.ProblemMachineImageSpec{ContainerDisk: "example.invalid/disk:test"}},
 				Access:  []labv1alpha1.AccessEndpoint{{Name: "console", Node: "router", Interface: "eth0"}},
 			},
 		}
@@ -268,7 +373,7 @@ var _ = Describe("Author VM lifecycle", func() {
 		Expect(size.Cmp(f.problem.Spec.Machine.Disk)).To(BeZero())
 		Expect(*vm.Spec.RunStrategy).To(Equal(virtv1.RunStrategyAlways))
 		Expect(vm.Spec.Template.Spec.Domain.CPU.Cores).To(Equal(uint32(1)))
-		Expect(vm.Spec.Template.Spec.Domain.Memory.Guest.Cmp(f.problem.Spec.Machine.Memory)).To(BeZero())
+		Expect(vm.Spec.Template.Spec.Domain.Memory.Guest.Cmp(*f.problem.Spec.Machine.Memory)).To(BeZero())
 		Expect(*vm.Spec.Template.Spec.Domain.Devices.AutoattachPodInterface).To(BeFalse())
 		Expect(vm.Spec.Template.Spec.Networks).To(BeEmpty())
 		Expect(vm.Spec.Template.Spec.Domain.Devices.Interfaces).To(BeEmpty())
@@ -352,7 +457,7 @@ var _ = Describe("Author VM lifecycle", func() {
 		pvc := f.boot()
 		vmi, pod := f.instanceAndPod()
 		f.problem.Spec.Machine.CPU = 2
-		f.problem.Spec.Machine.Memory = resource.MustParse("256Mi")
+		f.problem.Spec.Machine.Memory = ptr.To(resource.MustParse("256Mi"))
 		Expect(f.client.Update(ctx, f.problem)).To(Succeed())
 		f.reconcile()
 		Expect(*f.vm().Spec.RunStrategy).To(Equal(virtv1.RunStrategyHalted))

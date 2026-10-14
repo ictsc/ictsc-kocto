@@ -63,8 +63,12 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
-		By("installing pinned KubeVirt and CDI CRDs without running virtualization controllers")
-		cmd = exec.Command("kubectl", "apply", "--server-side", "--field-manager=kocto-e2e", "-f", "test/fixtures/crds")
+		By("installing the external test APIs without virtualization controllers")
+		externalCRDs, err := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "List", "items": utils.ExternalTestCRDs()})
+		Expect(err).NotTo(HaveOccurred())
+		externalManifest := filepath.Join(GinkgoT().TempDir(), "external-crds.json")
+		Expect(os.WriteFile(externalManifest, externalCRDs, 0o600)).To(Succeed())
+		cmd = exec.Command("kubectl", "apply", "--server-side", "--field-manager=kocto-e2e", "-f", externalManifest)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install external CRDs")
 

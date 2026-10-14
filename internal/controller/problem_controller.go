@@ -205,10 +205,17 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.problemState(ctx, problem, "ResourceConflict", "Author VM does not reference the managed root PVC", false, false, nil, diskRef)
 	}
 	ref := &labv1alpha1.ProblemVMReference{VMName: vm.Name, UID: vm.UID}
-	// CPUとゲストメモリだけを比較する。KubeVirtが補完した他の設定は差分に含めない。
+	// Minだけの変更やballoonの切り替えも停止を要する。KubeVirtの既定balloonは有効として比較する。
+	// 他の補完済みデバイスやリソースは差分に含めない。
 	domain := &vm.Spec.Template.Spec.Domain
+	desiredDomain := &desired.Spec.Template.Spec.Domain
+	requested := domain.Resources.Requests[corev1.ResourceMemory]
+	desiredRequested := desiredDomain.Resources.Requests[corev1.ResourceMemory]
+	balloonEnabled := domain.Devices.AutoattachMemBalloon == nil || *domain.Devices.AutoattachMemBalloon
+	desiredBalloonEnabled := desiredDomain.Devices.AutoattachMemBalloon == nil || *desiredDomain.Devices.AutoattachMemBalloon
 	resize := domain.CPU == nil || domain.CPU.Cores != desired.Spec.Template.Spec.Domain.CPU.Cores ||
-		domain.Memory == nil || domain.Memory.Guest == nil || domain.Memory.Guest.Cmp(problem.Spec.Machine.Memory) != 0
+		domain.Memory == nil || domain.Memory.Guest == nil || domain.Memory.Guest.Cmp(*desiredDomain.Memory.Guest) != 0 ||
+		requested.Cmp(desiredRequested) != 0 || balloonEnabled != desiredBalloonEnabled
 	if resize {
 		// 設定変更は停止後に行う。起動中のVMIへCPUやメモリを直接反映する処理ではない。
 		stopped, stopErr := r.problemStopped(ctx, problem, vm)
@@ -238,7 +245,11 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			domain.Memory = &virtv1.Memory{}
 		}
 		domain.Memory.Guest = desired.Spec.Template.Spec.Domain.Memory.Guest
-		vm.Spec.Template.Spec.Domain.Resources.Requests = desired.Spec.Template.Spec.Domain.Resources.Requests
+		if domain.Resources.Requests == nil {
+			domain.Resources.Requests = corev1.ResourceList{}
+		}
+		domain.Resources.Requests[corev1.ResourceMemory] = desiredRequested
+		domain.Devices.AutoattachMemBalloon = desiredDomain.Devices.AutoattachMemBalloon
 	}
 	// 設定変更後やロック解除後はAlwaysへ戻し、既存PVCからの起動をKubeVirtへ依頼する。
 	// runningとrunStrategyは併用できないため、古いrunning指定は外す。

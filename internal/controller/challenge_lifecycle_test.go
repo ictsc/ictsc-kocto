@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -228,6 +229,41 @@ var _ = Describe("Challenge lifecycle", func() {
 		Entry("class", func(s *corev1.PersistentVolumeClaimSpec) { s.StorageClassName = ptr.To("wrong-class") }),
 		Entry("mode", func(s *corev1.PersistentVolumeClaimSpec) { s.VolumeMode = ptr.To(corev1.PersistentVolumeBlock) }),
 	)
+	DescribeTable("preserves the saved memory policy in Manual team VMs",
+		func(enabled bool, request string) {
+			f := newChallengeFixture()
+			f.problem.Spec.Machine.Memory = ptr.To(resource.MustParse("4Gi"))
+			f.problem.Spec.Machine.MemoryBalloon = &labv1alpha1.ProblemMemoryBalloonSpec{Enabled: enabled}
+			if enabled {
+				f.problem.Spec.Machine.Memory = nil
+				f.problem.Spec.Machine.MemoryBalloon.Min = ptr.To(resource.MustParse(request))
+				f.problem.Spec.Machine.MemoryBalloon.Max = ptr.To(resource.MustParse("4Gi"))
+			}
+			Expect(f.client.Update(ctx, f.problem)).To(Succeed())
+			f.reconcile()
+			// テンプレートの変更後、作問VMのReadyを確認してからロックを取得する。
+			f.reconcile()
+			f.bootTeams()
+			content := &snapshotv1.VirtualMachineSnapshotContent{}
+			Expect(f.client.Get(ctx, types.NamespacedName{Name: f.challenge.Status.SnapshotRef.ContentRef.Name, Namespace: "default"}, content)).To(Succeed())
+			domains := []virtv1.DomainSpec{content.Spec.Source.VirtualMachine.Spec.Template.Spec.Domain}
+			for _, team := range f.challenge.Status.Teams {
+				vm := &virtv1.VirtualMachine{}
+				Expect(f.client.Get(ctx, types.NamespacedName{Name: team.VMRef.Name, Namespace: "default"}, vm)).To(Succeed())
+				Expect(*vm.Spec.RunStrategy).To(Equal(virtv1.RunStrategyManual))
+				domains = append(domains, vm.Spec.Template.Spec.Domain)
+			}
+			for _, domain := range domains {
+				Expect(domain.Memory.Guest.Cmp(resource.MustParse("4Gi"))).To(BeZero())
+				requested := domain.Resources.Requests[corev1.ResourceMemory]
+				Expect(requested.Cmp(resource.MustParse(request))).To(BeZero())
+				Expect(domain.Devices.AutoattachMemBalloon).To(HaveValue(Equal(enabled)))
+			}
+		},
+		Entry("enabled with overcommit", true, "1Gi"),
+		Entry("disabled with fixed memory", false, "4Gi"),
+	)
+
 	It("locks the source, saves one snapshot and starts independent Manual VMs only once", func() {
 		f := newChallengeFixture()
 		f.bootTeams()

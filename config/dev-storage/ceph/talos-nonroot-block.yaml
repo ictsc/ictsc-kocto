@@ -1,9 +1,0 @@
-# Talos v1.14 / containerd 2用。CDI/KubeVirtの非rootプロセスに割り当てたBlock deviceを使えるようにする。
-# Kubernetesのマニフェストではない。Talos管理用talosconfigで対象ノードにだけ追加する。
-# 更新するとTalosがCRIを再起動する。既存のCRI設定文書を削除/置換しない。
-apiVersion: v1alpha1
-kind: CRICustomizationConfig
-name: kocto-nonroot-block
-content: |
-  [plugins."io.containerd.cri.v1.runtime"]
-    device_ownership_from_security_context = true

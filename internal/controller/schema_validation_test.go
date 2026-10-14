@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -41,7 +42,7 @@ var _ = Describe("API transition validation", func() {
 					Repository: "https://example.invalid/problems.git", CommitHash: "initial", TopologyFile: "topology.yaml",
 				},
 				Machine: labv1alpha1.ProblemMachineSpec{
-					CPU: 1, Memory: resource.MustParse("128Mi"), Disk: resource.MustParse("1Gi"),
+					CPU: 1, Memory: ptr.To(resource.MustParse("128Mi")), Disk: resource.MustParse("1Gi"),
 					Image: labv1alpha1.ProblemMachineImageSpec{ContainerDisk: "example.invalid/disk:initial"},
 				},
 				Access: []labv1alpha1.AccessEndpoint{{Name: "console", Node: "router", Interface: "eth0"}},
@@ -144,11 +145,77 @@ var _ = Describe("API transition validation", func() {
 		Entry("positive integer disk", "disk", int64(1), true),
 	)
 
+	DescribeTable("validates fixed memory and balloon ranges",
+		func(memory any, balloon map[string]any, accepted bool) {
+			object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(newProblem())
+			Expect(err).NotTo(HaveOccurred())
+			p := &unstructured.Unstructured{Object: object}
+			p.SetGroupVersionKind(labv1alpha1.GroupVersion.WithKind("Problem"))
+			unstructured.RemoveNestedField(p.Object, "spec", "machine", "memory")
+			if memory != nil {
+				Expect(unstructured.SetNestedField(p.Object, memory, "spec", "machine", "memory")).To(Succeed())
+			}
+			if balloon != nil {
+				Expect(unstructured.SetNestedMap(p.Object, balloon, "spec", "machine", "memoryBalloon")).To(Succeed())
+			}
+			err = k8sClient.Create(ctx, p)
+			if accepted {
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() { Expect(k8sClient.Delete(ctx, p)).To(Succeed()) })
+			} else {
+				Expect(apierrors.IsInvalid(err)).To(BeTrue(), "creation error: %v", err)
+			}
+		},
+		Entry("legacy fixed", "4Gi", nil, true),
+		Entry("disabled with fixed memory", "4Gi", map[string]any{"enabled": false}, true),
+		Entry("enabled range", nil, map[string]any{"enabled": true, "min": "1Gi", "max": "4Gi"}, true),
+		Entry("equal quantities with different units", nil, map[string]any{"enabled": true, "min": "1024Mi", "max": "1Gi"}, true),
+		Entry("integer quantities", nil, map[string]any{"enabled": true, "min": int64(1024), "max": int64(4096)}, true),
+		Entry("missing fixed memory", nil, nil, false),
+		Entry("missing disabled memory", nil, map[string]any{"enabled": false}, false),
+		Entry("missing enabled flag", "4Gi", map[string]any{}, false),
+		Entry("missing min", nil, map[string]any{"enabled": true, "max": "4Gi"}, false),
+		Entry("missing max", nil, map[string]any{"enabled": true, "min": "1Gi"}, false),
+		Entry("both fixed memory and range", "4Gi", map[string]any{"enabled": true, "min": "1Gi", "max": "4Gi"}, false),
+		Entry("disabled with a range", "4Gi", map[string]any{"enabled": false, "min": "1Gi", "max": "4Gi"}, false),
+		Entry("inverted range", nil, map[string]any{"enabled": true, "min": "4Gi", "max": "1Gi"}, false),
+		Entry("zero min", nil, map[string]any{"enabled": true, "min": "0", "max": "4Gi"}, false),
+		Entry("negative max", nil, map[string]any{"enabled": true, "min": "1Gi", "max": "-4Gi"}, false),
+		Entry("zero max", nil, map[string]any{"enabled": true, "min": "1Gi", "max": int64(0)}, false),
+		Entry("malformed min", nil, map[string]any{"enabled": true, "min": "invalid", "max": "4Gi"}, false),
+		Entry("malformed max", nil, map[string]any{"enabled": true, "min": "1Gi", "max": "invalid"}, false),
+	)
+
+	It("allows switching memory policies only while unlocked", func() {
+		p := createProblem()
+		p.Spec.Machine.Memory = nil
+		p.Spec.Machine.MemoryBalloon = &labv1alpha1.ProblemMemoryBalloonSpec{
+			Enabled: true, Min: ptr.To(resource.MustParse("1Gi")), Max: ptr.To(resource.MustParse("4Gi")),
+		}
+		Expect(k8sClient.Update(ctx, p)).To(Succeed())
+		// Use the typed client too: optional fixed memory must be absent on the wire.
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p), p)).To(Succeed())
+		Expect(p.Spec.Machine.Memory).To(BeNil())
+		lockProblem(p)
+		p.Spec.Machine.MemoryBalloon.Min = ptr.To(resource.MustParse("2Gi"))
+		Expect(apierrors.IsInvalid(k8sClient.Update(ctx, p))).To(BeTrue())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p), p)).To(Succeed())
+		p.Status.ActiveChallenge = nil
+		Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+		p.Spec.Machine.MemoryBalloon.Min = ptr.To(resource.MustParse("2Gi"))
+		Expect(k8sClient.Update(ctx, p)).To(Succeed())
+		p.Spec.Machine.MemoryBalloon = &labv1alpha1.ProblemMemoryBalloonSpec{Enabled: false}
+		p.Spec.Machine.Memory = ptr.To(resource.MustParse("4Gi"))
+		Expect(k8sClient.Update(ctx, p)).To(Succeed())
+		p.Spec.Machine.MemoryBalloon = nil
+		Expect(k8sClient.Update(ctx, p)).To(Succeed())
+	})
+
 	DescribeTable("rejects nonpositive quantities on an unlocked Problem update",
 		func(field, value string) {
 			problem := createProblem()
 			if field == "memory" {
-				problem.Spec.Machine.Memory = resource.MustParse(value)
+				problem.Spec.Machine.Memory = ptr.To(resource.MustParse(value))
 			} else {
 				problem.Spec.Machine.Disk = resource.MustParse(value)
 			}
@@ -205,7 +272,7 @@ var _ = Describe("API transition validation", func() {
 			Expect(err.Error()).To(ContainSubstring("Problem spec cannot change while locked"))
 		},
 		Entry("CPU", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.CPU = 2 }),
-		Entry("memory", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.Memory = resource.MustParse("256Mi") }),
+		Entry("memory", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.Memory = ptr.To(resource.MustParse("256Mi")) }),
 		Entry("source", func(spec *labv1alpha1.ProblemSpec) { spec.Source.CommitHash = "updated" }),
 		Entry("access", func(spec *labv1alpha1.ProblemSpec) { spec.Access[0].Node = "another-router" }),
 	)
@@ -225,7 +292,7 @@ var _ = Describe("API transition validation", func() {
 			Expect(k8sClient.Update(ctx, problem)).To(Succeed())
 		},
 		Entry("CPU", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.CPU = 2 }),
-		Entry("memory", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.Memory = resource.MustParse("256Mi") }),
+		Entry("memory", func(spec *labv1alpha1.ProblemSpec) { spec.Machine.Memory = ptr.To(resource.MustParse("256Mi")) }),
 		Entry("source", func(spec *labv1alpha1.ProblemSpec) { spec.Source.CommitHash = "updated" }),
 		Entry("access", func(spec *labv1alpha1.ProblemSpec) { spec.Access[0].Node = "another-router" }),
 	)

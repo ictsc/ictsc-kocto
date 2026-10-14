@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
+	"github.com/ictsc/ictsc-kocto/test/utils"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -76,7 +77,8 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases"), filepath.Join("..", "..", "test", "fixtures", "crds")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDs:                  utils.ExternalTestCRDs(),
 		ErrorIfCRDPathMissing: true,
 	}
 

@@ -97,16 +97,22 @@ type ProblemSourceSpec struct {
 }
 
 // ProblemMachineSpecは、問題環境を動かすVMのスペックを表します。
+// +kubebuilder:validation:XValidation:rule="has(self.memoryBalloon) && self.memoryBalloon.enabled ? !has(self.memory) : has(self.memory)",message="machine.memory is required unless memoryBalloon is enabled and must be omitted when enabled"
 type ProblemMachineSpec struct {
 	// CPUはマシンのCPUコア数を指定する
 	// +kubebuilder:validation:Minimum=1
 	// +required
 	CPU int32 `json:"cpu"`
 
-	// Memoryはマシンのメモリ容量を指定する
+	// Memoryは固定のメモリ量を指定する。balloonを明示的に有効にする場合は省略する。
+	// 省略したmemoryBalloonは従来どおりゲスト量と要求量を揃え、デバイスの既定値も維持する。
 	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.memory must be a valid quantity greater than zero"
-	// +required
-	Memory resource.Quantity `json:"memory"`
+	// +optional
+	Memory *resource.Quantity `json:"memory,omitempty"`
+
+	// MemoryBalloonはvirtio-balloonの有効/無効と、ゲスト量と配置要求量を指定する。
+	// +optional
+	MemoryBalloon *ProblemMemoryBalloonSpec `json:"memoryBalloon,omitempty"`
 
 	// Diskは初回取り込み時のroot PVCの要求容量を指定する。
 	// 作成後は変更できない。
@@ -120,6 +126,26 @@ type ProblemMachineSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.image is immutable"
 	// +required
 	Image ProblemMachineImageSpec `json:"image"`
+}
+
+// ProblemMemoryBalloonSpecのMinは配置要求量であり、実行中のballoonの下限ではない。
+// 有効時は範囲を必須にし、無効時はmachine.memoryだけで固定量を指定する。
+// +kubebuilder:validation:XValidation:rule="self.enabled ? has(self.min) && has(self.max) : !has(self.min) && !has(self.max)",message="memoryBalloon requires min and max when enabled and forbids them when disabled"
+// +kubebuilder:validation:XValidation:rule="!has(self.min) || !has(self.max) || !isQuantity(string(self.min)) || !isQuantity(string(self.max)) || !quantity(string(self.min)).isGreaterThan(quantity(string(self.max)))",message="memoryBalloon.min must not exceed max"
+type ProblemMemoryBalloonSpec struct {
+	// Enabledはvirtio-balloonデバイスを接続するかを指定する。
+	// +required
+	Enabled bool `json:"enabled"`
+
+	// MinはKubernetesへ要求するメモリ量。KubeVirtの追加分は別に加算される。
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.min must be a valid quantity greater than zero"
+	// +optional
+	Min *resource.Quantity `json:"min,omitempty"`
+
+	// Maxはゲストに見せるメモリ量。memory.maxGuestによるhotplug上限ではない。
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.max must be a valid quantity greater than zero"
+	// +optional
+	Max *resource.Quantity `json:"max,omitempty"`
 }
 
 // ProblemMachineImageSpecは、問題環境VMの起動元を表します。

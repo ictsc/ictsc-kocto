@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,7 +69,7 @@ var _ = Describe("Problem Controller", func() {
 						},
 						Machine: labv1alpha1.ProblemMachineSpec{
 							CPU:    2,
-							Memory: resource.MustParse("4Gi"),
+							Memory: ptr.To(resource.MustParse("4Gi")),
 							Disk:   resource.MustParse("10Gi"),
 							Image: labv1alpha1.ProblemMachineImageSpec{
 								ContainerDisk: "ghcr.io/ictsc/kocto-runner:latest",
