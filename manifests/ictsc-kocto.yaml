@@ -492,19 +492,64 @@ spec:
                     anyOf:
                     - type: integer
                     - type: string
-                    description: Memoryはマシンのメモリ容量を指定する
+                    description: |-
+                      Memoryは固定のメモリ量を指定する。balloonを明示的に有効にする場合は省略する。
+                      省略したmemoryBalloonは従来どおりゲスト量と要求量を揃え、デバイスの既定値も維持する。
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                     x-kubernetes-validations:
                     - message: machine.memory must be a valid quantity greater than
                         zero
                       rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                  memoryBalloon:
+                    description: MemoryBalloonはvirtio-balloonの有効/無効と、ゲスト量と配置要求量を指定する。
+                    properties:
+                      enabled:
+                        description: Enabledはvirtio-balloonデバイスを接続するかを指定する。
+                        type: boolean
+                      max:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: Maxはゲストに見せるメモリ量。memory.maxGuestによるhotplug上限ではない。
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: memoryBalloon.max must be a valid quantity greater
+                            than zero
+                          rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                      min:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: MinはKubernetesへ要求するメモリ量。KubeVirtの追加分は別に加算される。
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: memoryBalloon.min must be a valid quantity greater
+                            than zero
+                          rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                    required:
+                    - enabled
+                    type: object
+                    x-kubernetes-validations:
+                    - message: memoryBalloon requires min and max when enabled and
+                        forbids them when disabled
+                      rule: 'self.enabled ? has(self.min) && has(self.max) : !has(self.min)
+                        && !has(self.max)'
+                    - message: memoryBalloon.min must not exceed max
+                      rule: '!has(self.min) || !has(self.max) || !isQuantity(string(self.min))
+                        || !isQuantity(string(self.max)) || !quantity(string(self.min)).isGreaterThan(quantity(string(self.max)))'
                 required:
                 - cpu
                 - disk
                 - image
-                - memory
                 type: object
+                x-kubernetes-validations:
+                - message: machine.memory is required unless memoryBalloon is enabled
+                    and must be omitted when enabled
+                  rule: 'has(self.memoryBalloon) && self.memoryBalloon.enabled ? !has(self.memory)
+                    : has(self.memory)'
               source:
                 description: Sourceは、問題を定義するGitリポジトリやディレクトリの情報を指定します。
                 properties:
@@ -1147,10 +1192,9 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
-        - --storage-class=kocto-ceph-rbd
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:2b1c5077abc3f51413f20f99d9ada2e28b7fe828
+        image: ghcr.io/ictsc/ictsc-kocto:849faa2d2ba43568c8674405bb3e44c7fe4d677c
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
