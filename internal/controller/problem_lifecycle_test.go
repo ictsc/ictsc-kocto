@@ -134,6 +134,40 @@ func (f *problemFixture) instanceAndPod() (*virtv1.VirtualMachineInstance, *core
 }
 
 var _ = Describe("Author VM lifecycle", func() {
+	It("rejects a replacement root PVC with the DataVolume's original owner UID", func() {
+		f := newProblemFixture()
+		pvc := f.boot()
+		originalUID := pvc.UID
+		Expect(originalUID).NotTo(BeEmpty())
+		Expect(f.client.Delete(ctx, pvc)).To(Succeed())
+
+		replacement := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: pvc.Name, Namespace: pvc.Namespace, OwnerReferences: pvc.OwnerReferences},
+			Spec:       *pvc.Spec.DeepCopy(),
+			Status:     *pvc.Status.DeepCopy(),
+		}
+		Expect(f.client.Create(ctx, replacement)).To(Succeed())
+		Expect(replacement.UID).NotTo(Equal(originalUID))
+
+		f.reconcile()
+
+		Expect(f.problem.Status.DiskRef.PVCUID).To(Equal(originalUID))
+		Expect(apiMeta.FindStatusCondition(f.problem.Status.Conditions, "VMReady").Reason).To(Equal("ResourceConflict"))
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(replacement), replacement)).To(Succeed())
+		Expect(replacement.UID).NotTo(Equal(originalUID))
+	})
+
+	It("records the existing root PVC UID when upgrading an older Problem status", func() {
+		f := newProblemFixture()
+		pvc := f.boot()
+		f.problem.Status.DiskRef.PVCUID = ""
+		Expect(f.client.Status().Update(ctx, f.problem)).To(Succeed())
+
+		f.reconcile()
+
+		Expect(f.problem.Status.DiskRef.PVCUID).To(Equal(pvc.UID))
+	})
+
 	DescribeTable("creates balloon policies without changing the disk",
 		func(config *labv1alpha1.ProblemMemoryBalloonSpec, guest, request string, enabled *bool) {
 			f := newProblemFixture()
@@ -597,6 +631,31 @@ var _ = Describe("Author VM lifecycle", func() {
 		Expect(controllerutil.ContainsFinalizer(f.problem, problemCleanupFinalizer)).To(BeTrue())
 		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(foreign), foreign)).To(Succeed())
 		Expect(foreign.ResourceVersion).To(Equal(version))
+	})
+
+	It("does not delete a replacement root PVC during cleanup even when its DataVolume owner UID matches", func() {
+		f := newProblemFixture()
+		pvc := f.boot()
+		dv := f.disk()
+		Expect(f.client.Delete(ctx, pvc)).To(Succeed())
+		replacement := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: pvc.Name, Namespace: pvc.Namespace, OwnerReferences: pvc.OwnerReferences},
+			Spec:       *pvc.Spec.DeepCopy(),
+			Status:     *pvc.Status.DeepCopy(),
+		}
+		Expect(f.client.Create(ctx, replacement)).To(Succeed())
+		Expect(replacement.UID).NotTo(Equal(pvc.UID))
+		version := replacement.ResourceVersion
+
+		Expect(f.client.Delete(ctx, f.problem)).To(Succeed())
+		f.reconcile()
+		f.reconcile()
+
+		Expect(apiMeta.FindStatusCondition(f.problem.Status.Conditions, "VMReady").Reason).To(Equal("ResourceConflict"))
+		Expect(controllerutil.ContainsFinalizer(f.problem, problemCleanupFinalizer)).To(BeTrue())
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(dv), &cdiv1.DataVolume{})).To(Succeed())
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(replacement), replacement)).To(Succeed())
+		Expect(replacement.ResourceVersion).To(Equal(version))
 	})
 
 	It("retains author resources on Problem deletion while locked", func() {

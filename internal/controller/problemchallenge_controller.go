@@ -209,6 +209,10 @@ func (r *ProblemChallengeReconciler) acquireProblem(ctx context.Context, c *labv
 		result, e := r.failChallenge(ctx, c, "SourceProblemChanged", "Problem identity or generation changed")
 		return nil, false, result, e
 	}
+	if c.Status.SourceProblem != nil && c.Status.SourceProblem.DiskPVCUID != "" && (p.Status.DiskRef == nil || c.Status.SourceProblem.DiskPVCUID != p.Status.DiskRef.PVCUID) {
+		result, e := r.failChallenge(ctx, c, "SourceProblemChanged", "Author disk PVC identity changed")
+		return nil, false, result, e
+	}
 	if lock := p.Status.ActiveChallenge; lock != nil && lock.UID != c.UID {
 		challengeCondition(c, "Accepted", false, "ProblemLocked", "Another Challenge owns the lock; recreate this Challenge to retry")
 		result, e := r.waitChallenge(ctx, c, "ProblemLocked", "Another Challenge owns the lock", false)
@@ -233,8 +237,14 @@ func (r *ProblemChallengeReconciler) acquireProblem(ctx context.Context, c *labv
 			result, e := r.waitChallenge(ctx, c, "ProblemNotReady", "Waiting for the author VM and disk", false)
 			return nil, false, result, e
 		}
-		if c.Status.SourceProblem == nil {
-			c.Status.SourceProblem = &labv1alpha1.SourceProblemReference{Name: p.Name, UID: p.UID, Generation: p.Generation}
+		if c.Status.SourceProblem == nil || c.Status.SourceProblem.DiskPVCUID == "" {
+			if p.Status.DiskRef == nil || p.Status.DiskRef.PVCUID == "" {
+				return nil, false, ctrl.Result{Requeue: true}, nil
+			}
+			if c.Status.SourceProblem == nil {
+				c.Status.SourceProblem = &labv1alpha1.SourceProblemReference{Name: p.Name, UID: p.UID, Generation: p.Generation}
+			}
+			c.Status.SourceProblem.DiskPVCUID = p.Status.DiskRef.PVCUID
 			if err := r.saveChallenge(ctx, c); err != nil {
 				return nil, false, ctrl.Result{}, err
 			}
@@ -277,8 +287,33 @@ func (r *ProblemChallengeReconciler) acquireProblem(ctx context.Context, c *labv
 		result, e := r.failChallenge(ctx, c, "SourceProblemChanged", "Source or lock changed during acceptance")
 		return nil, false, result, e
 	}
-	if !p.DeletionTimestamp.IsZero() && !apiMeta.IsStatusConditionTrue(c.Status.Conditions, "Accepted") {
-		result, e := r.failChallenge(ctx, c, "ProblemDeleting", "Problem deletion started during lock acquisition")
+	if p.Status.DiskRef == nil {
+		result, e := r.failChallenge(ctx, c, "SourceDiskMissing", "The recorded author disk is missing")
+		return nil, false, result, e
+	}
+	if p.Status.DiskRef.PVCUID == "" {
+		// 古いProblem statusにはPVC UIDがないため、ロック所有者が確認したPVCを一度だけ記録する。
+		pvc := &corev1.PersistentVolumeClaim{}
+		if err := r.reader().Get(ctx, types.NamespacedName{Name: p.Status.DiskRef.DiskName, Namespace: p.Namespace}, pvc); err != nil {
+			if apierrors.IsNotFound(err) {
+				result, e := r.failChallenge(ctx, c, "SourceDiskMissing", "The author root PVC is missing")
+				return nil, false, result, e
+			}
+			return nil, false, ctrl.Result{}, err
+		}
+		if !ownedByDataVolume(pvc, p.Status.DiskRef.UID) || pvc.Status.Phase != corev1.ClaimBound || !pvc.DeletionTimestamp.IsZero() {
+			result, e := r.failChallenge(ctx, c, "ResourceConflict", "The author root PVC cannot be verified")
+			return nil, false, result, e
+		}
+		p.Status.DiskRef.PVCUID = pvc.UID
+		if err := r.Status().Update(ctx, p); err != nil {
+			return nil, false, ctrl.Result{}, err
+		}
+	}
+	if c.Status.SourceProblem.DiskPVCUID == "" {
+		c.Status.SourceProblem.DiskPVCUID = p.Status.DiskRef.PVCUID
+	} else if c.Status.SourceProblem.DiskPVCUID != p.Status.DiskRef.PVCUID {
+		result, e := r.failChallenge(ctx, c, "SourceProblemChanged", "Author disk PVC identity changed")
 		return nil, false, result, e
 	}
 	challengeCondition(c, "Accepted", true, "ProblemAccepted", "The Challenge owns the author VM lock")
@@ -309,7 +344,7 @@ func (r *ProblemChallengeReconciler) sourceReady(ctx context.Context, p *labv1al
 			return false, err
 		}
 	}
-	return ownedByProblem(vm, p) && vm.UID == p.Status.VMRef.UID && vm.Status.Ready && vm.Status.ObservedGeneration >= vm.Generation && vm.DeletionTimestamp.IsZero() && ownedByProblem(dv, p) && dv.UID == p.Status.DiskRef.UID && dv.Status.Phase == cdiv1.Succeeded && dv.DeletionTimestamp.IsZero() && ownedByDataVolume(pvc, dv.UID) && pvc.Status.Phase == corev1.ClaimBound && pvc.DeletionTimestamp.IsZero(), nil
+	return ownedByProblem(vm, p) && vm.UID == p.Status.VMRef.UID && vm.Status.Ready && vm.Status.ObservedGeneration >= vm.Generation && vm.DeletionTimestamp.IsZero() && ownedByProblem(dv, p) && dv.UID == p.Status.DiskRef.UID && dv.Status.Phase == cdiv1.Succeeded && dv.DeletionTimestamp.IsZero() && ownedByDataVolume(pvc, dv.UID) && p.Status.DiskRef.PVCUID != "" && pvc.UID == p.Status.DiskRef.PVCUID && pvc.Status.Phase == corev1.ClaimBound && pvc.DeletionTimestamp.IsZero(), nil
 }
 
 // 親Problemの変更を、同じnamespaceでその名前を参照するChallengeへ通知する。

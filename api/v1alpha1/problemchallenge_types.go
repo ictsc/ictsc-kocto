@@ -125,6 +125,13 @@ type SourceProblemReference struct {
 	// Generationは、ロック取得時のProblemのgenerationを記録します。
 	// +required
 	Generation int64 `json:"generation"`
+
+	// DiskPVCUIDは、Challengeが受け入れた時点の作問ディスクPVCのUIDを記録します。
+	// 古いChallengeのstatusでは省略される場合があります。
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	DiskPVCUID types.UID `json:"diskPVCUID,omitempty"`
 }
 
 // ChallengeSnapshotReferenceは、出題元のProblemのスナップショットへの参照を表します。

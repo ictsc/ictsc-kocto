@@ -141,6 +141,9 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	// 取り込みの途中でもDataVolumeのUIDをstatusへ記録し、次回以降に同じディスクか判別できるようにする。
 	diskRef := &labv1alpha1.ProblemDiskReference{DiskName: dv.Name, UID: dv.UID}
+	if problem.Status.DiskRef != nil {
+		diskRef.PVCUID = problem.Status.DiskRef.PVCUID
+	}
 	if !dv.DeletionTimestamp.IsZero() {
 		return r.problemState(ctx, problem, "DiskDeleting", "Author disk is being deleted", false, false, nil, diskRef)
 	}
@@ -163,6 +166,11 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if !ownedByDataVolume(pvc, dv.UID) {
 		return r.problemState(ctx, problem, "ResourceConflict", "Root PVC does not belong to the author DataVolume", false, false, nil, diskRef)
 	}
+	if diskRef.PVCUID != "" && diskRef.PVCUID != pvc.UID {
+		return r.problemState(ctx, problem, "ResourceConflict", "Root PVC identity changed; do not use a replacement disk", false, false, nil, diskRef)
+	}
+	// 古いstatusにPVC UIDがない場合だけ、最初に確認できたPVCを記録する。
+	diskRef.PVCUID = pvc.UID
 	// 明示指定との不一致は変換や再作成で補わない。旧Problemは実際のPVCをそのまま使う。
 	if storage := problem.Spec.Storage; storage != nil && (pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != storage.StorageClassName || pvcVolumeMode(pvc.Spec) != storage.VolumeMode) {
 		return r.problemState(ctx, problem, "ResourceConflict", "Author PVC storage does not match the immutable Problem storage", false, false, nil, diskRef)
@@ -446,11 +454,26 @@ func (r *ProblemReconciler) deleteProblem(ctx context.Context, problem *labv1alp
 		if !ownedByProblem(dv, problem) || (problem.Status.DiskRef != nil && problem.Status.DiskRef.UID != dv.UID) {
 			return r.problemState(ctx, problem, "ResourceConflict", "Do not delete another owner's DataVolume", false, false, nil, nil)
 		}
-		// DataVolume作成直後にcontrollerが落ちると、statusへのUID記録がまだない場合がある。
-		// 先にUIDを保存し、DataVolume削除後にPVCだけ残っても所有関係を確認できるようにする。
-		if problem.Status.DiskRef == nil {
+		// 古いstatusにPVC UIDがない場合は、DataVolumeを消す前に現PVCのUIDも記録する。
+		pvc := &corev1.PersistentVolumeClaim{}
+		pvcErr := r.reader().Get(ctx, types.NamespacedName{Namespace: problem.Namespace, Name: diskName}, pvc)
+		if pvcErr != nil && !apierrors.IsNotFound(pvcErr) {
+			return ctrl.Result{}, pvcErr
+		}
+		if pvcErr == nil && !ownedByDataVolume(pvc, dv.UID) {
+			return r.problemState(ctx, problem, "ResourceConflict", "Cannot prove root PVC ownership", false, false, nil, nil)
+		}
+		if pvcErr == nil && problem.Status.DiskRef != nil && problem.Status.DiskRef.PVCUID != "" && problem.Status.DiskRef.PVCUID != pvc.UID {
+			return r.problemState(ctx, problem, "ResourceConflict", "Root PVC identity changed; do not delete a replacement disk", false, false, nil, nil)
+		}
+		if problem.Status.DiskRef == nil || (problem.Status.DiskRef.PVCUID == "" && pvcErr == nil) {
+			// DataVolume作成直後にcontrollerが落ちた場合も、DataVolume削除前にUIDを記録する。
+			diskRef := &labv1alpha1.ProblemDiskReference{DiskName: dv.Name, UID: dv.UID}
+			if pvcErr == nil {
+				diskRef.PVCUID = pvc.UID
+			}
 			result, stateErr := r.problemState(ctx, problem, "CleanupPending", "Recording author disk identity before cleanup", false, false, nil,
-				&labv1alpha1.ProblemDiskReference{DiskName: dv.Name, UID: dv.UID})
+				diskRef)
 			result.RequeueAfter = 5 * time.Second
 			return result, stateErr
 		}
@@ -468,6 +491,17 @@ func (r *ProblemReconciler) deleteProblem(ctx context.Context, problem *labv1alp
 	if err == nil {
 		if problem.Status.DiskRef == nil || !ownedByDataVolume(pvc, problem.Status.DiskRef.UID) {
 			return r.problemState(ctx, problem, "ResourceConflict", "Cannot prove root PVC ownership", false, false, nil, nil)
+		}
+		if problem.Status.DiskRef.PVCUID != "" && problem.Status.DiskRef.PVCUID != pvc.UID {
+			return r.problemState(ctx, problem, "ResourceConflict", "Root PVC identity changed; do not delete a replacement disk", false, false, nil, nil)
+		}
+		if problem.Status.DiskRef.PVCUID == "" {
+			// 旧statusではPVC UIDがないため、残存PVCのUIDを削除前に一度だけ記録する。
+			ref := problem.Status.DiskRef.DeepCopy()
+			ref.PVCUID = pvc.UID
+			result, stateErr := r.problemState(ctx, problem, "CleanupPending", "Recording root PVC identity before cleanup", false, false, nil, ref)
+			result.RequeueAfter = 5 * time.Second
+			return result, stateErr
 		}
 		if err := r.Delete(ctx, pvc, client.Preconditions{UID: &pvc.UID}); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)

@@ -54,6 +54,23 @@ func rememberRef(ref **labv1alpha1.TeamResourceReference, object client.Object) 
 
 // 停止確認後に1つだけSnapshotを作り、rootディスクを含む保存が完了するまで待つ。
 func (r *ProblemChallengeReconciler) ensureSnapshot(ctx context.Context, c *labv1alpha1.ProblemChallenge, p *labv1alpha1.Problem) (*snapshotv1.VirtualMachineSnapshot, bool, ctrl.Result, error) {
+	if c.Status.SourceProblem == nil || c.Status.SourceProblem.DiskPVCUID == "" || p.Status.DiskRef == nil ||
+		p.Status.DiskRef.PVCUID == "" || p.Status.DiskRef.PVCUID != c.Status.SourceProblem.DiskPVCUID {
+		result, e := r.failSnapshot(ctx, c, "ResourceConflict", "Author disk PVC identity is not recorded consistently")
+		return nil, false, result, e
+	}
+	sourcePVC := &corev1.PersistentVolumeClaim{}
+	if err := r.reader().Get(ctx, types.NamespacedName{Name: p.Status.DiskRef.DiskName, Namespace: p.Namespace}, sourcePVC); err != nil {
+		if apierrors.IsNotFound(err) {
+			result, e := r.failSnapshot(ctx, c, "SourceDiskMissing", "The locked author root PVC is missing")
+			return nil, false, result, e
+		}
+		return nil, false, ctrl.Result{}, err
+	}
+	if sourcePVC.UID != c.Status.SourceProblem.DiskPVCUID || !ownedByDataVolume(sourcePVC, p.Status.DiskRef.UID) || sourcePVC.Status.Phase != corev1.ClaimBound || !sourcePVC.DeletionTimestamp.IsZero() {
+		result, e := r.failSnapshot(ctx, c, "ResourceConflict", "The locked author root PVC identity changed")
+		return nil, false, result, e
+	}
 	s := &snapshotv1.VirtualMachineSnapshot{}
 	err := r.reader().Get(ctx, types.NamespacedName{Name: challengeSnapshotName(c), Namespace: c.Namespace}, s)
 	if apierrors.IsNotFound(err) {
@@ -179,6 +196,9 @@ func (r *ProblemChallengeReconciler) recordSnapshotChildren(ctx context.Context,
 	}
 	if len(content.Spec.VolumeBackups) != 1 || content.Spec.VolumeBackups[0].VolumeName != "root" || content.Spec.VolumeBackups[0].PersistentVolumeClaim.Name != sourceDisk {
 		return nil, nil, resourceFailure("RootDiskExcluded", "Snapshot content does not contain only the author root disk")
+	}
+	if content.Spec.VolumeBackups[0].PersistentVolumeClaim.UID != c.Status.SourceProblem.DiskPVCUID {
+		return nil, nil, resourceFailure("ResourceConflict", "Snapshot content records a different author root PVC")
 	}
 	backup := content.Spec.VolumeBackups[0]
 	if backup.VolumeSnapshotName == nil {

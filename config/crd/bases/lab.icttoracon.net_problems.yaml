@@ -309,6 +309,12 @@ spec:
                     description: Nameは、初回取り込みを管理するDataVolumeの名前を指定します。
                     minLength: 1
                     type: string
+                  pvcUID:
+                    description: |-
+                      PVCUIDは、作問データを保持するPVCのUIDを指定します。
+                      古いstatusにこの値がない場合は、controllerが現在のPVCを一度だけ記録します。
+                    minLength: 1
+                    type: string
                   uid:
                     description: UIDは、初回取り込みを管理するDataVolumeのUIDを指定します。
                     minLength: 1

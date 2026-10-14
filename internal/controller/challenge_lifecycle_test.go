@@ -54,6 +54,23 @@ type challengeFixture struct {
 	starts     map[string]int
 }
 
+type deletingAfterProblemLockReader struct {
+	client.Reader
+	problemKey types.NamespacedName
+}
+
+func (r deletingAfterProblemLockReader) Get(ctx context.Context, key types.NamespacedName, object client.Object, options ...client.GetOption) error {
+	if err := r.Reader.Get(ctx, key, object, options...); err != nil {
+		return err
+	}
+	problem, ok := object.(*labv1alpha1.Problem)
+	if ok && key == r.problemKey && problem.Status.ActiveChallenge != nil {
+		deleting := metav1.Now()
+		problem.DeletionTimestamp = &deleting
+	}
+	return nil
+}
+
 func newChallengeFixture() *challengeFixture {
 	author := newProblemFixture()
 	author.boot()
@@ -190,6 +207,22 @@ func (f *challengeFixture) bootTeams() {
 }
 
 var _ = Describe("Challenge lifecycle", func() {
+	It("keeps the acquired lock when Problem deletion starts before Accepted status is saved", func() {
+		f := newChallengeFixture()
+		f.reconciler.APIReader = deletingAfterProblemLockReader{
+			Reader:     f.client,
+			problemKey: client.ObjectKeyFromObject(f.problem),
+		}
+
+		f.reconcileChallenge()
+
+		Expect(apiMeta.IsStatusConditionTrue(f.challenge.Status.Conditions, "Accepted")).To(BeTrue())
+		Expect(apiMeta.IsStatusConditionTrue(f.challenge.Status.Conditions, "Failed")).To(BeFalse())
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
+		Expect(f.problem.Status.ActiveChallenge).NotTo(BeNil())
+		Expect(f.problem.Status.ActiveChallenge.UID).To(Equal(f.challenge.UID))
+	})
+
 	DescribeTable("restores and verifies the saved PVC storage rather than the manager default",
 		func(mode corev1.PersistentVolumeMode) {
 			f := newChallengeFixture()
@@ -480,6 +513,30 @@ var _ = Describe("Challenge lifecycle", func() {
 		Expect(f.problem.Status.ActiveChallenge).To(BeNil())
 		Expect(*f.vm().Spec.RunStrategy).To(Equal(virtv1.RunStrategyAlways))
 		Expect(f.disk().UID).To(Equal(sourceUID))
+	})
+	It("fails closed if the root PVC is replaced after the Challenge acquires the lock", func() {
+		f := newChallengeFixture()
+		f.reconcileChallenge()
+		f.reconcile()
+		original := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: f.disk().Name, Namespace: f.problem.Namespace}, original)).To(Succeed())
+		originalUID := original.UID
+		Expect(originalUID).NotTo(BeEmpty())
+		Expect(f.client.Delete(ctx, original)).To(Succeed())
+
+		replacement := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: original.Name, Namespace: original.Namespace, OwnerReferences: original.OwnerReferences},
+			Spec:       *original.Spec.DeepCopy(),
+			Status:     *original.Status.DeepCopy(),
+		}
+		Expect(f.client.Create(ctx, replacement)).To(Succeed())
+		Expect(replacement.UID).NotTo(Equal(originalUID))
+
+		f.reconcileChallenge()
+
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(apierrors.IsNotFound(f.client.Get(ctx, types.NamespacedName{Name: challengeSnapshotName(f.challenge), Namespace: f.challenge.Namespace}, &snapshotv1.VirtualMachineSnapshot{}))).To(BeTrue())
+		Expect(f.problem.Status.ActiveChallenge.UID).To(Equal(f.challenge.UID))
 	})
 	It("discovers restore-created resources during cleanup even if team refs were never saved", func() {
 		f := newChallengeFixture()

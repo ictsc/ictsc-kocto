@@ -9,9 +9,9 @@ spec:
   problemRef:
     name: problem-sample
   placement:
-    # 対象のKubernetes Nodeだけに付いているラベルを指定します。
+    # KubeVirtがVMを配置可能としたNodeを対象にします。特定Nodeへ絞る場合は、そのNodeだけのラベルへ置き換えてください。
     nodeSelector:
-      kubernetes.io/hostname: "test-talos-kocto-cp1"
+      kubevirt.io/schedulable: "true"
   teams:
     - id: "team-001"
     - id: "team-002"
@@ -27,9 +27,9 @@ spec:
   problemRef:
     name: problem-sample-2
   placement:
-    # 対象のKubernetes Nodeだけに付いているラベルを指定します。
+    # KubeVirtがVMを配置可能としたNodeを対象にします。特定Nodeへ絞る場合は、そのNodeだけのラベルへ置き換えてください。
     nodeSelector:
-      kubernetes.io/hostname: "test-talos-kocto-cp1"
+      kubevirt.io/schedulable: "true"
   teams:
     - id: "team-001"
     - id: "team-002"

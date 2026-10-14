@@ -223,6 +223,13 @@ type ProblemDiskReference struct {
 	// +kubebuilder:validation:Type=string
 	// +kubebuilder:validation:MinLength=1
 	UID types.UID `json:"uid"`
+
+	// PVCUIDは、作問データを保持するPVCのUIDを指定します。
+	// 古いstatusにこの値がない場合は、controllerが現在のPVCを一度だけ記録します。
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	PVCUID types.UID `json:"pvcUID,omitempty"`
 }
 type ActiveChallengeStatus struct {
 	// ActiveChallengeNameは、ロックを所有するChallengeの情報を示します。

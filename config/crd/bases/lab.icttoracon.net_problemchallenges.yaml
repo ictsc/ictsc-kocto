@@ -231,6 +231,12 @@ spec:
               sourceProblem:
                 description: SourceProblemは、出題元のProblemを示します
                 properties:
+                  diskPVCUID:
+                    description: |-
+                      DiskPVCUIDは、Challengeが受け入れた時点の作問ディスクPVCのUIDを記録します。
+                      古いChallengeのstatusでは省略される場合があります。
+                    minLength: 1
+                    type: string
                   generation:
                     description: Generationは、ロック取得時のProblemのgenerationを記録します。
                     format: int64
