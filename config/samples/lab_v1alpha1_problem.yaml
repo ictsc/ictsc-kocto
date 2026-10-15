@@ -13,11 +13,11 @@ spec:
     topologyFile: "topology.yaml"
     ansiblePlaybook: "playbook.yaml"
   machine:
-    cpu: 2
-    memory: "4Gi"
-    disk: "10Gi"
+    cpu: 1
+    memory: "128Mi"
+    disk: "1Gi"
     image:
-      containerDisk: "ghcr.io/ictsc/kocto-runner:latest"
+      containerDisk: "quay.io/kubevirt/cirros-container-disk-demo@sha256:9d36bdd2b8f86e37058a58be47f82c9e94e2741df8fc8144cecf80fd953c8643"
   access:
     - name: "web"
       node: "web-node"
@@ -37,11 +37,11 @@ spec:
     directory: "problems/sample-2"
     topologyFile: "topology.yaml"
   machine:
-    cpu: 2
-    memory: "4Gi"
-    disk: "10Gi"
+    cpu: 1
+    memory: "128Mi"
+    disk: "1Gi"
     image:
-      containerDisk: "ghcr.io/ictsc/kocto-runner:latest"
+      containerDisk: "quay.io/kubevirt/cirros-container-disk-demo@sha256:9d36bdd2b8f86e37058a58be47f82c9e94e2741df8fc8144cecf80fd953c8643"
   access:
     - name: "web"
       node: "web-node"

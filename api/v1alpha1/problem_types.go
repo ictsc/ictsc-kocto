@@ -17,15 +17,18 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Problem APIで使う型を定義します。
 // フィールドを追加するときはJSONタグも指定してください。
 
 // ProblemSpecはProblemに指定する内容を表します。
+// +kubebuilder:validation:XValidation:rule="has(self.storage) == has(oldSelf.storage)",message="storageはProblemの作成後に追加や削除ができません"
 type ProblemSpec struct {
 	// 作問者が指定するフィールドをここに追加します。
 	// 型を変更したらmake manifestsとmake generateを実行してください。
@@ -39,11 +42,32 @@ type ProblemSpec struct {
 	// +required
 	Machine ProblemMachineSpec `json:"machine"`
 
+	// Storageは初回取り込み先を指定する。省略時はmanagerのStorageClassとFilesystemを使う。
+	// 既存Problemへの後付けや削除は禁止し、作問済みのディスクを別の構成へ切り替えない。
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageは変更できません"
+	// +optional
+	Storage *ProblemStorageSpec `json:"storage,omitempty"`
+
 	// +kubebuilder:validation:MinItems=1
 	// +listType=map
 	// +listMapKey=name
 	// +required
 	Access []AccessEndpoint `json:"access"`
+}
+
+// ProblemStorageSpecは作問ディスクの保存先と接続方法を表す。アクセスモードはRWOを使う。
+type ProblemStorageSpec struct {
+	// StorageClassNameは初回取り込み先のStorageClass名を指定する。
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+	// +required
+	StorageClassName string `json:"storageClassName"`
+
+	// VolumeModeはFilesystemまたはBlockを指定する。作成後に変換しない。
+	// +kubebuilder:validation:Enum=Filesystem;Block
+	// +required
+	VolumeMode corev1.PersistentVolumeMode `json:"volumeMode"`
 }
 
 // ProblemSourceSpecは問題のソース情報を表す
@@ -73,23 +97,58 @@ type ProblemSourceSpec struct {
 }
 
 // ProblemMachineSpecは、問題環境を動かすVMのスペックを表します。
+// Memoryか、有効なMemoryBalloonの範囲指定が必須。両方の省略や有効時の二重指定は拒否する。
+// 各フィールドのoptionalは単独で省略できるという意味で、以下のCELが組み合わせを検証する。
+// MemoryBalloonを無効にする場合は固定量のMemoryが必要になる。
+// +kubebuilder:validation:XValidation:rule="has(self.memoryBalloon) && self.memoryBalloon.enabled ? !has(self.memory) : has(self.memory)",message="memoryBalloonが有効な場合はmemoryを省略し、それ以外はmemoryが必須です"
 type ProblemMachineSpec struct {
 	// CPUはマシンのCPUコア数を指定する
 	// +kubebuilder:validation:Minimum=1
 	// +required
 	CPU int32 `json:"cpu"`
 
-	// Memoryはマシンのメモリ容量を指定する
-	// +required
-	Memory resource.Quantity `json:"memory"`
+	// Memoryは固定のメモリ量を指定する。balloonを明示的に有効にする場合は省略する。
+	// 省略したmemoryBalloonは従来どおりゲスト量と要求量を揃え、デバイスの既定値も維持する。
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.memoryは有効なQuantityで0より大きい値にしてください"
+	// +optional
+	Memory *resource.Quantity `json:"memory,omitempty"`
 
-	// Diskはマシンのディスク容量を指定する
+	// MemoryBalloonはvirtio-balloonの有効/無効と、ゲスト量と配置要求量を指定する。
+	// +optional
+	MemoryBalloon *ProblemMemoryBalloonSpec `json:"memoryBalloon,omitempty"`
+
+	// Diskは初回取り込み時のroot PVCの要求容量を指定する。
+	// 作成後は変更できない。
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="machine.diskは有効なQuantityで0より大きい値にしてください"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.diskは変更できません"
 	// +required
 	Disk resource.Quantity `json:"disk"`
 
-	// Imageは、VMの起動元となるイメージを指定する
+	// Imageは、初回取り込み元のイメージを指定する。
+	// 作成後は変更できない。
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="machine.imageは変更できません"
 	// +required
 	Image ProblemMachineImageSpec `json:"image"`
+}
+
+// ProblemMemoryBalloonSpecのMinは配置要求量であり、実行中のballoonの下限ではない。
+// 有効時は範囲を必須にし、無効時はmachine.memoryだけで固定量を指定する。
+// +kubebuilder:validation:XValidation:rule="self.enabled ? has(self.min) && has(self.max) : !has(self.min) && !has(self.max)",message="memoryBalloonが有効な場合はminとmaxが必須で、無効な場合は指定できません"
+// +kubebuilder:validation:XValidation:rule="!has(self.min) || !has(self.max) || !isQuantity(string(self.min)) || !isQuantity(string(self.max)) || !quantity(string(self.min)).isGreaterThan(quantity(string(self.max)))",message="memoryBalloon.minはmax以下にしてください"
+type ProblemMemoryBalloonSpec struct {
+	// Enabledはvirtio-balloonデバイスを接続するかを指定する。
+	// +required
+	Enabled bool `json:"enabled"`
+
+	// MinはKubernetesへ要求するメモリ量。KubeVirtの追加分は別に加算される。
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.minは有効なQuantityで0より大きい値にしてください"
+	// +optional
+	Min *resource.Quantity `json:"min,omitempty"`
+
+	// Maxはゲストに見せるメモリ量。memory.maxGuestによるhotplug上限ではない。
+	// +kubebuilder:validation:XValidation:rule="isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))",message="memoryBalloon.maxは有効なQuantityで0より大きい値にしてください"
+	// +optional
+	Max *resource.Quantity `json:"max,omitempty"`
 }
 
 // ProblemMachineImageSpecは、問題環境VMの起動元を表します。
@@ -126,10 +185,72 @@ type ProblemStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// VMRefは、管理する作問VMの名前とUIDを記録します。
+	// +optional
+	VMRef *ProblemVMReference `json:"vmRef,omitempty"`
+
+	// DiskRefは、初回取り込みを管理するDataVolumeの名前とUIDを記録します。
+	// +optional
+	DiskRef *ProblemDiskReference `json:"diskRef,omitempty"`
+
+	// ActiveChallengeは、ロックを所有するChallengeの情報を記録します。
+	// +optional
+	ActiveChallenge *ActiveChallengeStatus `json:"activeChallenge,omitempty"`
+}
+
+type ProblemVMReference struct {
+	// Nameは、管理する作問VMの名前を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	VMName string `json:"vmName"`
+
+	// UIDは、管理する作問VMのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+}
+
+type ProblemDiskReference struct {
+	// Nameは、初回取り込みを管理するDataVolumeの名前を指定します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	DiskName string `json:"diskName"`
+
+	// UIDは、初回取り込みを管理するDataVolumeのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+
+	// PVCUIDは、作問データを保持するPVCのUIDを指定します。
+	// 古いstatusにこの値がない場合は、controllerが現在のPVCを一度だけ記録します。
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	PVCUID types.UID `json:"pvcUID,omitempty"`
+}
+type ActiveChallengeStatus struct {
+	// ActiveChallengeNameは、ロックを所有するChallengeの情報を示します。
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	ActiveChallengeName string `json:"activeChallengeName"`
+
+	// UIDは、現在アクティブなChallengeのUIDを指定します。
+	// +required
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:MinLength=1
+	UID types.UID `json:"uid"`
+
+	// ProblemGenerationは、ロック取得時のProblemの世代を指定します。
+	// +required
+	ProblemGeneration int64 `json:"problemGeneration"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec == oldSelf.spec",message="ProblemのspecはChallengeによるロック中は変更できません"
 
 // Problemは問題環境を表すリソースです。
 type Problem struct {

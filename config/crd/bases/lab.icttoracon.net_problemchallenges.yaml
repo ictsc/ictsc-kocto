@@ -89,6 +89,9 @@ spec:
             - problemRef
             - teams
             type: object
+            x-kubernetes-validations:
+            - message: ProblemChallengeのspecは変更できません
+              rule: self == oldSelf
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。
             properties:
@@ -160,6 +163,218 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - type
+                x-kubernetes-list-type: map
+              snapshotRef:
+                description: SnapshotRefは、出題元のProblemのスナップショットを示します。
+                properties:
+                  contentRef:
+                    description: |-
+                      ContentRefは、保存したVM構成とディスク一覧を持つVirtualMachineSnapshotContentを示す。
+                      削除途中でcontrollerが再起動しても、同じ子リソースの片付けを続けるために記録する。
+                    properties:
+                      name:
+                        description: Nameは、参照するリソースの名前を記録します。
+                        minLength: 1
+                        type: string
+                      uid:
+                        description: UIDは、参照するリソースのUIDを記録します。
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - uid
+                    type: object
+                  name:
+                    description: Nameは、参照するスナップショットの名前を指定します。
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UIDは、参照するスナップショットのUIDを指定します。
+                    minLength: 1
+                    type: string
+                  volumeSnapshotContentRef:
+                    description: |-
+                      VolumeSnapshotContentRefは、rootディスクのCSI VolumeSnapshotContentを示す。
+                      このリソースはクラスタ全体に属するため、namespaceを指定せずに参照する。
+                    properties:
+                      name:
+                        description: Nameは、参照するリソースの名前を記録します。
+                        minLength: 1
+                        type: string
+                      uid:
+                        description: UIDは、参照するリソースのUIDを記録します。
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - uid
+                    type: object
+                  volumeSnapshotRef:
+                    description: VolumeSnapshotRefは、rootディスクのCSI VolumeSnapshotを示す。同じnamespaceにある。
+                    properties:
+                      name:
+                        description: Nameは、参照するリソースの名前を記録します。
+                        minLength: 1
+                        type: string
+                      uid:
+                        description: UIDは、参照するリソースのUIDを記録します。
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - uid
+                    type: object
+                required:
+                - name
+                - uid
+                type: object
+              sourceProblem:
+                description: SourceProblemは、出題元のProblemを示します
+                properties:
+                  diskPVCUID:
+                    description: |-
+                      DiskPVCUIDは、Challengeが受け入れた時点の作問ディスクPVCのUIDを記録します。
+                      古いChallengeのstatusでは省略される場合があります。
+                    minLength: 1
+                    type: string
+                  generation:
+                    description: Generationは、ロック取得時のProblemのgenerationを記録します。
+                    format: int64
+                    type: integer
+                  name:
+                    description: Nameは、参照するProblemの名前を指定します。
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UIDは、参照するProblemのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - generation
+                - name
+                - uid
+                type: object
+              teams:
+                description: Teamsは、各チームの問題環境の状態を表します。
+                items:
+                  description: ProblemChallengeTeamStatusは、各チームの問題環境の状態を表します。
+                  properties:
+                    cloneRef:
+                      description: CloneRefは、チーム用のVirtualMachineCloneへの参照を示します。
+                      properties:
+                        name:
+                          description: Nameは、参照するリソースの名前を記録します。
+                          minLength: 1
+                          type: string
+                        uid:
+                          description: UIDは、参照するリソースのUIDを記録します。
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    conditions:
+                      description: Conditionsは、チームの問題環境の状態を種類ごとに表します。
+                      items:
+                        description: Condition contains details for one aspect of
+                          the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False,
+                              Unknown.
+                            enum:
+                            - "True"
+                            - "False"
+                            - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                        - lastTransitionTime
+                        - message
+                        - reason
+                        - status
+                        - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - type
+                      x-kubernetes-list-type: map
+                    id:
+                      description: IDは、チームの識別子を指定します。
+                      minLength: 1
+                      type: string
+                    pvcRef:
+                      description: PVCRefは、復元したチームのroot PVCへの参照を示します。
+                      properties:
+                        name:
+                          description: Nameは、参照するリソースの名前を記録します。
+                          minLength: 1
+                          type: string
+                        uid:
+                          description: UIDは、参照するリソースのUIDを記録します。
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                    vmRef:
+                      description: VMRefは、復元したチームVMへの参照を示します。
+                      properties:
+                        name:
+                          description: Nameは、参照するリソースの名前を記録します。
+                          minLength: 1
+                          type: string
+                        uid:
+                          description: UIDは、参照するリソースのUIDを記録します。
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
+                  required:
+                  - id
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - id
                 x-kubernetes-list-type: map
             type: object
         required:

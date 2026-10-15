@@ -74,11 +74,20 @@ spec:
                     anyOf:
                     - type: integer
                     - type: string
-                    description: Diskはマシンのディスク容量を指定する
+                    description: |-
+                      Diskは初回取り込み時のroot PVCの要求容量を指定する。
+                      作成後は変更できない。
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: machine.diskは有効なQuantityで0より大きい値にしてください
+                      rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                    - message: machine.diskは変更できません
+                      rule: self == oldSelf
                   image:
-                    description: Imageは、VMの起動元となるイメージを指定する
+                    description: |-
+                      Imageは、初回取り込み元のイメージを指定する。
+                      作成後は変更できない。
                     properties:
                       containerDisk:
                         description: ContainerDiskは、VMの起動元として使うコンテナディスクイメージを指定する
@@ -87,19 +96,66 @@ spec:
                     required:
                     - containerDisk
                     type: object
+                    x-kubernetes-validations:
+                    - message: machine.imageは変更できません
+                      rule: self == oldSelf
                   memory:
                     anyOf:
                     - type: integer
                     - type: string
-                    description: Memoryはマシンのメモリ容量を指定する
+                    description: |-
+                      Memoryは固定のメモリ量を指定する。balloonを明示的に有効にする場合は省略する。
+                      省略したmemoryBalloonは従来どおりゲスト量と要求量を揃え、デバイスの既定値も維持する。
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: machine.memoryは有効なQuantityで0より大きい値にしてください
+                      rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                  memoryBalloon:
+                    description: MemoryBalloonはvirtio-balloonの有効/無効と、ゲスト量と配置要求量を指定する。
+                    properties:
+                      enabled:
+                        description: Enabledはvirtio-balloonデバイスを接続するかを指定する。
+                        type: boolean
+                      max:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: Maxはゲストに見せるメモリ量。memory.maxGuestによるhotplug上限ではない。
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: memoryBalloon.maxは有効なQuantityで0より大きい値にしてください
+                          rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                      min:
+                        anyOf:
+                        - type: integer
+                        - type: string
+                        description: MinはKubernetesへ要求するメモリ量。KubeVirtの追加分は別に加算される。
+                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                        x-kubernetes-int-or-string: true
+                        x-kubernetes-validations:
+                        - message: memoryBalloon.minは有効なQuantityで0より大きい値にしてください
+                          rule: isQuantity(string(self)) && quantity(string(self)).isGreaterThan(quantity('0'))
+                    required:
+                    - enabled
+                    type: object
+                    x-kubernetes-validations:
+                    - message: memoryBalloonが有効な場合はminとmaxが必須で、無効な場合は指定できません
+                      rule: 'self.enabled ? has(self.min) && has(self.max) : !has(self.min)
+                        && !has(self.max)'
+                    - message: memoryBalloon.minはmax以下にしてください
+                      rule: '!has(self.min) || !has(self.max) || !isQuantity(string(self.min))
+                        || !isQuantity(string(self.max)) || !quantity(string(self.min)).isGreaterThan(quantity(string(self.max)))'
                 required:
                 - cpu
                 - disk
                 - image
-                - memory
                 type: object
+                x-kubernetes-validations:
+                - message: memoryBalloonが有効な場合はmemoryを省略し、それ以外はmemoryが必須です
+                  rule: 'has(self.memoryBalloon) && self.memoryBalloon.enabled ? !has(self.memory)
+                    : has(self.memory)'
               source:
                 description: Sourceは、問題を定義するGitリポジトリやディレクトリの情報を指定します。
                 properties:
@@ -129,14 +185,61 @@ spec:
                 - repository
                 - topologyFile
                 type: object
+              storage:
+                description: |-
+                  Storageは初回取り込み先を指定する。省略時はmanagerのStorageClassとFilesystemを使う。
+                  既存Problemへの後付けや削除は禁止し、作問済みのディスクを別の構成へ切り替えない。
+                properties:
+                  storageClassName:
+                    description: StorageClassNameは初回取り込み先のStorageClass名を指定する。
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                  volumeMode:
+                    description: VolumeModeはFilesystemまたはBlockを指定する。作成後に変換しない。
+                    enum:
+                    - Filesystem
+                    - Block
+                    type: string
+                required:
+                - storageClassName
+                - volumeMode
+                type: object
+                x-kubernetes-validations:
+                - message: storageは変更できません
+                  rule: self == oldSelf
             required:
             - access
             - machine
             - source
             type: object
+            x-kubernetes-validations:
+            - message: storageはProblemの作成後に追加や削除ができません
+              rule: has(self.storage) == has(oldSelf.storage)
           status:
             description: statusには、コントローラーが確認した現在の状態が入ります。
             properties:
+              activeChallenge:
+                description: ActiveChallengeは、ロックを所有するChallengeの情報を記録します。
+                properties:
+                  activeChallengeName:
+                    description: ActiveChallengeNameは、ロックを所有するChallengeの情報を示します。
+                    minLength: 1
+                    type: string
+                  problemGeneration:
+                    description: ProblemGenerationは、ロック取得時のProblemの世代を指定します。
+                    format: int64
+                    type: integer
+                  uid:
+                    description: UIDは、現在アクティブなChallengeのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - activeChallengeName
+                - problemGeneration
+                - uid
+                type: object
               conditions:
                 description: |-
                   Conditionsは、Problemの現在の状態を表します。
@@ -199,10 +302,50 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              diskRef:
+                description: DiskRefは、初回取り込みを管理するDataVolumeの名前とUIDを記録します。
+                properties:
+                  diskName:
+                    description: Nameは、初回取り込みを管理するDataVolumeの名前を指定します。
+                    minLength: 1
+                    type: string
+                  pvcUID:
+                    description: |-
+                      PVCUIDは、作問データを保持するPVCのUIDを指定します。
+                      古いstatusにこの値がない場合は、controllerが現在のPVCを一度だけ記録します。
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UIDは、初回取り込みを管理するDataVolumeのUIDを指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - diskName
+                - uid
+                type: object
+              vmRef:
+                description: VMRefは、管理する作問VMの名前とUIDを記録します。
+                properties:
+                  uid:
+                    description: UIDは、管理する作問VMのUIDを指定します。
+                    minLength: 1
+                    type: string
+                  vmName:
+                    description: Nameは、管理する作問VMの名前を指定します。
+                    minLength: 1
+                    type: string
+                required:
+                - uid
+                - vmName
+                type: object
             type: object
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: ProblemのspecはChallengeによるロック中は変更できません
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec
+            == oldSelf.spec'
     served: true
     storage: true
     subresources:

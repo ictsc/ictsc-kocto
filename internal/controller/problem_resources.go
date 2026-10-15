@@ -1,0 +1,150 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"crypto/sha256"
+	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	virtv1 "kubevirt.io/api/core/v1"
+	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
+
+	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
+)
+
+const (
+	// ownerReferenceを直接たどれないVMIやPodから、元のProblemを探すためのラベル。
+	problemUIDLabel         = "lab.icttoracon.net/problem-uid"
+	problemCleanupFinalizer = "lab.icttoracon.net/problem-cleanup"
+)
+
+// problemResourceNamesは、Problemが使うVM名と初回取り込み用のDataVolume/PVC名を返す。
+func problemResourceNames(problem *labv1alpha1.Problem) (string, string) {
+	// 同じProblemの復旧では名前を固定し、削除後に同名のProblemを作った場合は別の名前にする。
+	// UIDのハッシュを使うことで、古いProblemのディスクを新しいProblemへ誤って接続しない。
+	hash := sha256.Sum256([]byte(problem.UID))
+	prefix := fmt.Sprintf("problem-%x", hash[:10])
+	return prefix + "-vm", prefix + "-root"
+}
+
+// problemLabelsは、子リソースの監視と停止確認で使うProblemの識別ラベルを作る。
+// ラベルは検索に使い、更新や削除の権限を判断する所有確認にはownerReferenceのUIDを使う。
+func problemLabels(problem *labv1alpha1.Problem) map[string]string {
+	return map[string]string{problemUIDLabel: string(problem.UID)}
+}
+
+// problemDataVolumeは、イメージの取り込み元とPVCの容量を指定したDataVolumeを組み立てる。
+// この関数はAPIへ作成せず、Reconcileが所有者を設定してからCreateする。
+func problemDataVolume(problem *labv1alpha1.Problem, storageClass string) *cdiv1.DataVolume {
+	_, name := problemResourceNames(problem)
+	// containerDiskはVM用ディスクの配布元であり、初回だけCDIで永続PVCへ取り込む。
+	// 作問VMの復旧ではこのイメージを再取り込みせず、作問内容が入った同じPVCを使う。
+	url := "docker://" + problem.Spec.Machine.Image.ContainerDisk
+	mode := corev1.PersistentVolumeFilesystem
+	if problem.Spec.Storage != nil {
+		storageClass = problem.Spec.Storage.StorageClassName
+		mode = problem.Spec.Storage.VolumeMode
+	}
+	return &cdiv1.DataVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: problem.Namespace, Labels: problemLabels(problem)},
+		Spec: cdiv1.DataVolumeSpec{
+			// Registryはコンテナレジストリからの取り込み、KubeVirtはVM用ディスクとしての取り込みを指定する。
+			Source:      &cdiv1.DataVolumeSource{Registry: &cdiv1.DataVolumeSourceRegistry{URL: &url}},
+			ContentType: cdiv1.DataVolumeKubeVirt,
+			Storage: &cdiv1.StorageSpec{
+				// 作問側のHAには、障害ノード以外からも同じPVCを利用できるCSI基盤が必要。
+				// RWOだけではHAにならず、旧ノードからの安全な切り離しも基盤側で保証する。
+				StorageClassName: &storageClass, VolumeMode: &mode,
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
+					corev1.ResourceStorage: problem.Spec.Machine.Disk.DeepCopy(),
+				}},
+			},
+		},
+	}
+}
+
+// Kubernetesでは省略したvolumeModeはFilesystemとして扱う。古いPVCの照合にも使う。
+func pvcVolumeMode(spec corev1.PersistentVolumeClaimSpec) corev1.PersistentVolumeMode {
+	if spec.VolumeMode == nil {
+		return corev1.PersistentVolumeFilesystem
+	}
+	return *spec.VolumeMode
+}
+
+// problemVirtualMachineは、ProblemのCPU/メモリと取り込み済みPVCを使うVMの定義を組み立てる。
+// VirtualMachineのTemplateから、KubeVirtが実行中のVirtualMachineInstanceを作る。
+func problemVirtualMachine(problem *labv1alpha1.Problem) *virtv1.VirtualMachine {
+	name, disk := problemResourceNames(problem)
+	// 作問VMはHA対象とし、VMI終了後の自動再起動はKubeVirtのAlwaysに委ねる。
+	// 複数の作問VMを同時に起動する方式ではなく、同じPVCで1台を復旧する。
+	run := virtv1.RunStrategyAlways
+	if problem.Status.ActiveChallenge != nil {
+		// 出題中の停止はHAより優先する。障害復旧後もロックが残る間は起動しない。
+		run = virtv1.RunStrategyHalted
+	}
+	// 今回はゲストのネットワークを構築しないので、既定のPodネットワークも接続しない。
+	nic := false
+	// KubeVirtへ渡す停止猶予。ゲストのACPIシャットダウンを待ち、期限後の処理はKubeVirtに委ねる。
+	grace := int64(300)
+	// 固定量ではゲストと要求量を揃える。有効時だけMinを要求量、Maxをゲスト量に分ける。
+	// MinはPodの配置判断に使われ、balloonをMinまで膨らませる指示ではない。
+	memory, requested := resource.Quantity{}, resource.Quantity{}
+	var balloon *bool
+	if config := problem.Spec.Machine.MemoryBalloon; config != nil {
+		enabled := config.Enabled
+		balloon = &enabled
+		if enabled {
+			memory, requested = config.Max.DeepCopy(), config.Min.DeepCopy()
+		}
+	}
+	if balloon == nil || !*balloon {
+		memory = problem.Spec.Machine.Memory.DeepCopy()
+		requested = memory.DeepCopy()
+	}
+	return &virtv1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: problem.Namespace, Labels: problemLabels(problem)},
+		Spec: virtv1.VirtualMachineSpec{
+			RunStrategy: &run,
+			Template: &virtv1.VirtualMachineInstanceTemplateSpec{
+				// VMIとlauncher Podにも識別ラベルを引き継ぎ、更新通知と停止待ちで追跡できるようにする。
+				ObjectMeta: metav1.ObjectMeta{Labels: problemLabels(problem)},
+				Spec: virtv1.VirtualMachineInstanceSpec{
+					TerminationGracePeriodSeconds: &grace,
+					// Domainはゲストの仮想ハードウェア設定。Guestはゲストに見せるメモリ量で、
+					// Requestsはlauncher Podの配置に使う要求量。KubeVirtが必要な追加分を補う。
+					Domain: virtv1.DomainSpec{
+						CPU:       &virtv1.CPU{Cores: uint32(problem.Spec.Machine.CPU)},
+						Memory:    &virtv1.Memory{Guest: &memory},
+						Resources: virtv1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: requested}},
+						Devices: virtv1.Devices{AutoattachPodInterface: &nic, AutoattachMemBalloon: balloon, Disks: []virtv1.Disk{{
+							Name: "root", DiskDevice: virtv1.DiskDevice{Disk: &virtv1.DiskTarget{Bus: virtv1.DiskBusVirtio}},
+						}}},
+					},
+					// Devicesのrootディスクと同名のVolumeを結び付け、PVCをvirtioディスクとして接続する。
+					// 元のcontainerDiskを直接接続しないため、VMを再作成しても作問内容がPVCに残る。
+					Volumes: []virtv1.Volume{{Name: "root", VolumeSource: virtv1.VolumeSource{
+						PersistentVolumeClaim: &virtv1.PersistentVolumeClaimVolumeSource{PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{ClaimName: disk}},
+					}}},
+				},
+			},
+		},
+	}
+}

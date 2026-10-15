@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,7 +69,7 @@ var _ = Describe("Problem Controller", func() {
 						},
 						Machine: labv1alpha1.ProblemMachineSpec{
 							CPU:    2,
-							Memory: resource.MustParse("4Gi"),
+							Memory: ptr.To(resource.MustParse("4Gi")),
 							Disk:   resource.MustParse("10Gi"),
 							Image: labv1alpha1.ProblemMachineImageSpec{
 								ContainerDisk: "ghcr.io/ictsc/kocto-runner:latest",
@@ -86,12 +87,14 @@ var _ = Describe("Problem Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
+			// テストで作成したProblemを削除する。
 			resource := &labv1alpha1.Problem{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance Problem")
+			resource.Finalizers = nil
+			Expect(k8sClient.Update(ctx, resource)).To(Succeed())
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
@@ -105,18 +108,18 @@ var _ = Describe("Problem Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			// Reconcile後の状態を確認する。
+			// 必要なstatus条件はここで検証する。
 			updatedProblem := &labv1alpha1.Problem{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updatedProblem)).To(Succeed())
 			Expect(updatedProblem.Spec.Machine.Image.ContainerDisk).To(Equal("ghcr.io/ictsc/kocto-runner:latest"))
 
-			readyCondition := apiMeta.FindStatusCondition(updatedProblem.Status.Conditions, "Ready")
+			readyCondition := apiMeta.FindStatusCondition(updatedProblem.Status.Conditions, "VMReady")
 
 			Expect(readyCondition).NotTo(BeNil())
 
 			Expect(readyCondition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(readyCondition.Reason).To(Equal("ProvisionerNotImplemented"))
+			Expect(readyCondition.Reason).To(Equal("StorageClassRequired"))
 			Expect(readyCondition.ObservedGeneration).To(Equal(updatedProblem.Generation))
 		})
 
@@ -147,7 +150,7 @@ var _ = Describe("Problem Controller", func() {
 
 				created := &labv1alpha1.Problem{}
 				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: sample.Namespace, Name: sample.Name}, created)).To(Succeed())
-				Expect(created.Spec.Machine.Image.ContainerDisk).To(Equal("ghcr.io/ictsc/kocto-runner:latest"))
+				Expect(created.Spec.Machine.Image.ContainerDisk).To(Equal("quay.io/kubevirt/cirros-container-disk-demo@sha256:9d36bdd2b8f86e37058a58be47f82c9e94e2741df8fc8144cecf80fd953c8643"))
 				sampleCount++
 			}
 			Expect(sampleCount).To(BeNumerically(">", 0))
