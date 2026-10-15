@@ -239,6 +239,12 @@ spec:
               sourceProblem:
                 description: SourceProblemは、出題元のProblemを示します
                 properties:
+                  diskPVCUID:
+                    description: |-
+                      DiskPVCUIDは、Challengeが受け入れた時点の作問ディスクPVCのUIDを記録します。
+                      古いChallengeのstatusでは省略される場合があります。
+                    minLength: 1
+                    type: string
                   generation:
                     description: Generationは、ロック取得時のProblemのgenerationを記録します。
                     format: int64
@@ -695,6 +701,12 @@ spec:
                 properties:
                   diskName:
                     description: Nameは、初回取り込みを管理するDataVolumeの名前を指定します。
+                    minLength: 1
+                    type: string
+                  pvcUID:
+                    description: |-
+                      PVCUIDは、作問データを保持するPVCのUIDを指定します。
+                      古いstatusにこの値がない場合は、controllerが現在のPVCを一度だけ記録します。
                     minLength: 1
                     type: string
                   uid:
@@ -1188,7 +1200,7 @@ spec:
         - --health-probe-bind-address=:8081
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:3a6b0b76957b79bd97525b7dc5bbf7c5618cc5bc
+        image: ghcr.io/ictsc/ictsc-kocto:f323e93652b719902b8a1cc5b38a407e4a400e57
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
