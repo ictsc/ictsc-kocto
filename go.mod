@@ -3,7 +3,7 @@ module github.com/ictsc/ictsc-kocto
 go 1.26.0
 
 require (
-	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.6.0
+	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.7.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
 	gopkg.in/evanphx/json-patch.v4 v4.13.0
@@ -12,8 +12,8 @@ require (
 	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v0.37.1
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
-	kubevirt.io/api v1.9.0
-	kubevirt.io/containerized-data-importer-api v1.64.0
+	kubevirt.io/api v1.9.1
+	kubevirt.io/containerized-data-importer-api v1.66.1
 	sigs.k8s.io/controller-runtime v0.25.2
 )
 
