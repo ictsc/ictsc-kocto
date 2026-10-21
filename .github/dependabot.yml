@@ -12,12 +12,19 @@ updates:
       time: "09:00"
       timezone: Asia/Tokyo
     open-pull-requests-limit: 5
+    allow:
+      - dependency-type: all
     commit-message:
       prefix: chore
       include: scope
     labels:
       - dependencies
     groups:
+      # Keep this identifier in sync with the auto-merge gate.
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
       kubernetes:
         patterns:
           - k8s.io/*
@@ -48,6 +55,31 @@ updates:
     labels:
       - dependencies
     groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
       github-actions:
         patterns:
           - "*"
+
+  # Refresh the digest of the current Go series, including security patches.
+  # Go toolchain releases are not covered by gomod security updates.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: daily
+      time: "09:00"
+      timezone: Asia/Tokyo
+    allow:
+      - dependency-name: golang
+    ignore:
+      - dependency-name: golang
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - dependencies
