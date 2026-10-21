@@ -23,16 +23,20 @@ DependabotとRenovateが作成したbranchのpushでは、このdeploy用workflo
 
 ### 依存関係の更新とPRの検証
 
-Dependabotが`go.mod`とGitHub Actionsの依存を毎週確認し、更新PRを作成します（`.github/dependabot.yml`）。k8s.io系とcontroller-runtime、Ginkgo/Gomegaはgroup化しているため、まとまった1本のPRとして届きます。k8s関連はcontroller-runtime、controller-tools、envtestのKubernetesバージョンが連動するため、自動マージは使わず内容を確認してからmergeします。
+Dependabotが`go.mod`の直接依存と間接依存、GitHub Actionsの依存を毎週確認し、更新PRを作成します。設定は`.github/dependabot.yml`にあります。通常の更新ではk8s.io系とcontroller-runtime、Ginkgo/Gomegaをそれぞれgroup化しています。
 
 Pull requestではGitHub Actionsが`make lint`、`make test`、生成物の差分チェックを実行します（`.github/workflows/ci.yaml`）。DependabotのPRも同じ検証を通ります。CIが成功すると、`workflow_run`でCI完了を待つ`.github/workflows/dependabot-automerge.yaml`がDependabotのPRをsquash mergeします（Dependabotの`pull_request`では`GITHUB_TOKEN`がread-onlyになるため、CI側ではなく`workflow_run`側でmergeします）。
 
-自動マージの可否は`hack/dependabot-automerge-gate.sh`が`gh pr diff`の`go.mod`と`.github/workflows/`だけから判定し、次の更新は自動マージせず人がレビューします。
+セキュリティ更新は、GoパッケージとGitHub Actionsのそれぞれで`security-updates`グループにまとめます。このグループは[セキュリティ更新だけを対象](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#groups)にしており、CIが成功すればk8s関連やmajorバージョンの更新も自動マージします。PRの作成者がDependabotであることと、CIで検証したコミットがPRの最新コミットであることを確認してから、グループ名を含むbranch名で判定します。ラベルやPRのタイトルは判定に使いません。
+
+通常の更新では`hack/dependabot-automerge-gate.sh`が`go.mod`と`.github/workflows/`の差分から判定し、次の更新は人がレビューします。
 
 - `k8s.io/*`と`sigs.k8s.io/*`の更新（controller-runtime、controller-tools、envtestのKubernetesバージョンが連動するため）
 - majorバージョンの更新（Go moduleとGitHub Actionsの`uses:`の両方）
 
-repository設定ではDependabot alerts、security updates、Allow auto-mergeを有効にしています。脆弱性が検出されると更新PRが作成され、security updateはgroup化の対象外なので依存ごとに個別のPRとして届きます。
+repository設定ではDependabot alerts、security updates、Allow auto-mergeを有効にしています。脆弱性が検出されるとセキュリティ更新のPRが作成されます。この設定を入れる前に作成された個別のPRには、通常の更新と同じ判定が適用されます。
+
+Go本体は`gomod`のセキュリティ更新では更新されないため、Dockerfileの`golang`イメージをDependabotの更新対象にしています。同じGo系列のイメージのdigestを毎日確認し、CIが成功したら自動マージして開発用イメージを再ビルドします。CIとpublish用workflowでも`go.mod`に書かれたGo系列の最新パッチを使います。Goの系列を上げる場合は`go.mod`とDockerfileを合わせて変更してください。
 
 `Makefile`のツールバージョン（`KUSTOMIZE_VERSION`、`CONTROLLER_TOOLS_VERSION`、`GOLANGCI_LINT_VERSION`）とE2Eのcert-managerバージョン（`test/utils/utils.go`）はDependabotの対象外なので、手動で更新します。
 

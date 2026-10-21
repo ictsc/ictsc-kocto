@@ -28,9 +28,10 @@ jobs:
         id: find
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           number="$(gh pr list --repo "$GITHUB_REPOSITORY" \
-            --head "${{ github.event.workflow_run.head_branch }}" \
+            --base main --head "$HEAD_BRANCH" \
             --state open --json number --jq '.[0].number // empty')"
           echo "number=$number" >> "$GITHUB_OUTPUT"
 
@@ -40,10 +41,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.find.outputs.number }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          # The API reports Dependabot as "app/dependabot", the web UI as
-          # "dependabot[bot]".
-          author="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json author --jq .author.login)"
+          # REST reports "dependabot[bot]"; the CLI can use "app/dependabot".
+          metadata="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR")"
+          author="$(jq -r .user.login <<< "$metadata")"
           case "$author" in
             dependabot\[bot\]|app/dependabot) ;;
             *)
@@ -51,8 +53,15 @@ jobs:
               exit 0
               ;;
           esac
+          if ! jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$TESTED_SHA" \
+            '.head.repo.full_name == $repo and .head.sha == $sha and .base.ref == "main"' \
+            <<< "$metadata" > /dev/null; then
+            echo "Pull request #$PR does not match the tested commit in this repository"
+            exit 0
+          fi
+          head_branch="$(jq -r .head.ref <<< "$metadata")"
           gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/pull-request.diff"
-          if hack/dependabot-automerge-gate.sh "$RUNNER_TEMP/pull-request.diff"; then
+          if hack/dependabot-automerge-gate.sh "$RUNNER_TEMP/pull-request.diff" "$head_branch"; then
             echo "merge=true" >> "$GITHUB_OUTPUT"
           else
             echo "merge=false" >> "$GITHUB_OUTPUT"
@@ -63,8 +72,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ steps.find.outputs.number }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch \
+            --match-head-commit "$TESTED_SHA"
           echo "Merged pull request #$PR"
 
       # A merge made with GITHUB_TOKEN does not trigger push workflows, so the

@@ -21,12 +21,20 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v7
 
+      - name: Read the Go release series
+        id: go-version
+        run: awk '/^go / { split($2, v, "."); print "version=" v[1] "." v[2] ".x"; exit }' go.mod >> "$GITHUB_OUTPUT"
+
       # Keep this on the same major as the publish workflow.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.go-version.outputs.version }}
+          check-latest: true
           cache: true
+
+      - name: Test Dependabot auto-merge policy
+        run: bash hack/test-dependabot-automerge-gate.sh
 
       - name: Run linter
         run: make lint
