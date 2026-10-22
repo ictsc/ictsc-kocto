@@ -71,6 +71,11 @@ updates:
       interval: daily
       time: "09:00"
       timezone: Asia/Tokyo
+    # Docker digest refreshes are version updates, even for Go security fixes.
+    # Do not delay them with Dependabot's default cooldown.
+    cooldown:
+      exclude:
+        - golang
     allow:
       - dependency-name: golang
     ignore:
