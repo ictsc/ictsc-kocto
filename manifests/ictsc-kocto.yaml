@@ -1257,11 +1257,11 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
-        - --bundle-builder-image=ghcr.io/ictsc/ictsc-kocto-bundle-builder@sha256:4d1e7f3beeea4647c711c8bfa06332ee374b449b3b9f15d84a67b7c15e205750
+        - --bundle-builder-image=ghcr.io/ictsc/ictsc-kocto-bundle-builder@sha256:24a76e9c4085ad2b5e91fdca61375ab710613f5eefd8baa757cf46a644671d0c
         - --bundle-builder-pull-secret=ghcr-pull
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:b6a4ad8eb1e12262d8f44c79d78ff906d45490ed
+        image: ghcr.io/ictsc/ictsc-kocto:1e974418cd4273ff0e4e872c4c41f6568f56399e
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
