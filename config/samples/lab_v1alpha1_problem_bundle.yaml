@@ -1,11 +1,11 @@
 # Requires a deployed manager configured with --bundle-builder-image=<trusted image digest>.
 # Replace commitHash with a published commit that contains test/fixtures/offline-lab.
+# Select the target namespace with kubectl --namespace.
 # This sample is deliberately not included in config/samples/kustomization.yaml.
 apiVersion: lab.icttoracon.net/v1alpha1
 kind: Problem
 metadata:
   name: offline-containerlab
-  namespace: kocto-authoring
 spec:
   source:
     repository: https://github.com/ictsc/ictsc-kocto
