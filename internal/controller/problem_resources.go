@@ -119,7 +119,7 @@ func problemVirtualMachine(problem *labv1alpha1.Problem) *virtv1.VirtualMachine 
 		memory = problem.Spec.Machine.Memory.DeepCopy()
 		requested = memory.DeepCopy()
 	}
-	return &virtv1.VirtualMachine{
+	vm := &virtv1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: problem.Namespace, Labels: problemLabels(problem)},
 		Spec: virtv1.VirtualMachineSpec{
 			RunStrategy: &run,
@@ -147,4 +147,10 @@ func problemVirtualMachine(problem *labv1alpha1.Problem) *virtv1.VirtualMachine 
 			},
 		},
 	}
+	if problem.Status.BundleRef != nil {
+		name := problemBundleName(problem)
+		vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, virtv1.Volume{Name: "bundle", VolumeSource: virtv1.VolumeSource{PersistentVolumeClaim: &virtv1.PersistentVolumeClaimVolumeSource{PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{ClaimName: name, ReadOnly: true}}}})
+		vm.Spec.Template.Spec.Domain.Devices.Disks = append(vm.Spec.Template.Spec.Domain.Devices.Disks, virtv1.Disk{Name: "bundle", DiskDevice: virtv1.DiskDevice{Disk: &virtv1.DiskTarget{Bus: virtv1.DiskBusVirtio, ReadOnly: true}}})
+	}
+	return vm
 }

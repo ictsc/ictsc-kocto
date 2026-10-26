@@ -52,25 +52,49 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push amd64 image
+      - name: Build and push amd64 controller image
+        id: controller-image
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64
           push: true
           tags: ghcr.io/ictsc/ictsc-kocto:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=controller
+          cache-to: type=gha,mode=max,scope=controller
+
+      - name: Build and push amd64 bundle builder image
+        id: bundle-image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: build/bundle/Dockerfile
+          build-args: VCS_REF=${{ github.sha }}
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/ictsc/ictsc-kocto-bundle-builder:${{ github.sha }}
+          cache-from: type=gha,scope=bundle-builder
+          cache-to: type=gha,mode=max,scope=bundle-builder
+
+      - name: Execute and inspect the published bundle builder
+        env:
+          BUILDER_IMAGE: ghcr.io/ictsc/ictsc-kocto-bundle-builder@${{ steps.bundle-image.outputs.digest }}
+          BUNDLE_TEST_REPOSITORY: https://github.com/${{ github.repository }}
+          BUNDLE_TEST_COMMIT: ${{ github.sha }}
+        run: |
+          docker pull "$BUILDER_IMAGE"
+          bash hack/test-bundle-builder.sh
 
       - name: Render development manifests
         env:
           DEV_IMAGE: ghcr.io/ictsc/ictsc-kocto:${{ github.sha }}
+          BUNDLE_IMAGE: ghcr.io/ictsc/ictsc-kocto-bundle-builder@${{ steps.bundle-image.outputs.digest }}
           DEV_MANIFEST: ${{ runner.temp }}/ictsc-kocto.yaml
         run: |
           mkdir -p "$(dirname "$DEV_MANIFEST")"
           make manifests kustomize
           ./bin/kustomize build config/default \
-            | python3 hack/set-dev-image.py "$DEV_IMAGE" ghcr-pull \
+            | python3 hack/set-dev-image.py "$DEV_IMAGE" ghcr-pull "$BUNDLE_IMAGE" ghcr-pull \
             > "$DEV_MANIFEST"
 
       - name: Publish manifests to the GitOps branch

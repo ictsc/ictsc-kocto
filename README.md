@@ -297,3 +297,11 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+### ProblemのオフラインContainerlab bundle
+
+新規ProblemのsourceをKubernetes Jobで取得・bundle化し、追加PVCとしてVMへ渡す実装は
+[docs/offline-bundles.md](docs/offline-bundles.md)を参照してください。
+管理者が信頼済みbuilder imageを `--bundle-builder-image` へ指定して有効にします。
+既存Problemへの後付け、source更新、bundle付きProblemChallengeは対象外です。
+実KubeVirt/Flatcarでの結合試験は未実施です。
