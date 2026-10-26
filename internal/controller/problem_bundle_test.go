@@ -426,4 +426,19 @@ var _ = Describe("Offline Problem bundles", func() {
 		Expect(f.disk().Spec.Storage.StorageClassName).To(Equal(ptr.To(storageClass)))
 	})
 
+	It("allows KubeVirt to prepare the PVC while keeping the guest bundle disk read-only", func() {
+		f := newBundleFixture()
+		startBundle(f)
+		vm := problemVirtualMachine(f.problem)
+		Expect(vm.Spec.Template.Spec.Volumes[1].Name).To(Equal("bundle"))
+		Expect(vm.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ReadOnly).To(BeFalse())
+		Expect(vm.Spec.Template.Spec.Domain.Devices.Disks[1].Name).To(Equal("bundle"))
+		Expect(vm.Spec.Template.Spec.Domain.Devices.Disks[1].Disk.ReadOnly).To(BeTrue())
+		Expect(problemVolumesMatch(f.problem, vm)).To(BeTrue())
+		// The old mount layout fails directory chown on Ceph. Detect a mismatched
+		// existing VM rather than silently rewriting an authored VM template.
+		vm.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ReadOnly = true
+		Expect(problemVolumesMatch(f.problem, vm)).To(BeFalse())
+	})
+
 })
