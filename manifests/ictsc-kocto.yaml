@@ -634,6 +634,43 @@ spec:
                 - problemGeneration
                 - uid
                 type: object
+              bundleRef:
+                description: BundleRef fixes the first build input and resource identities.
+                  Existing Problems without it keep their root-only VM.
+                properties:
+                  builderImage:
+                    description: BuilderImage and StorageClassName are fixed when
+                      the first build is selected.
+                    type: string
+                  imagePullSecret:
+                    description: ImagePullSecret is a Secret name in the Problem namespace;
+                      credentials are never read or copied by the controller.
+                    type: string
+                  jobUID:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                  pvcUID:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                  ready:
+                    description: Ready means the builder completed, not that Containerlab
+                      deployed in the guest.
+                    type: boolean
+                  sourceHash:
+                    type: string
+                  storageClassName:
+                    type: string
+                required:
+                - builderImage
+                - sourceHash
+                - storageClassName
+                type: object
               conditions:
                 description: |-
                   Conditionsは、Problemの現在の状態を表します。
@@ -740,6 +777,9 @@ spec:
         - message: ProblemのspecはChallengeによるロック中は変更できません
           rule: '!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec
             == oldSelf.spec'
+        - message: bundle生成開始後のsourceは変更できません
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.bundleRef) || self.spec.source
+            == oldSelf.spec.source'
     served: true
     storage: true
     subresources:
@@ -804,7 +844,6 @@ rules:
   - ""
   resources:
   - nodes
-  - pods
   verbs:
   - get
   - list
@@ -814,11 +853,31 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - create
   - delete
   - get
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - watch
 - apiGroups:
   - cdi.kubevirt.io
@@ -1198,9 +1257,11 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
+        - --bundle-builder-image=ghcr.io/ictsc/ictsc-kocto-bundle-builder@sha256:150fb51753300cc0e21a370f3ee4c63c97920d5f74e9916857952f1aee3d9edb
+        - --bundle-builder-pull-secret=ghcr-pull
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:97a9afee8dc3da25c4b386aff200d50bfee2119a
+        image: ghcr.io/ictsc/ictsc-kocto:d95c88efcda0a3ecf63c48af667e3d2f8e72f200
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
