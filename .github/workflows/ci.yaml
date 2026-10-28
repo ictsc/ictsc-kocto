@@ -36,6 +36,13 @@ jobs:
       - name: Test Dependabot auto-merge policy
         run: bash hack/test-dependabot-automerge-gate.sh
 
+      - name: Test development manifest rendering
+        run: python3 -m unittest discover -s hack -p 'test_set_dev_image.py'
+
+      - name: Check GitHub Actions syntax
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck= .github/workflows/*.yaml
+
       - name: Run linter
         run: make lint
 
@@ -46,3 +53,42 @@ jobs:
       # A dirty tree means generated artifacts were not committed.
       - name: Verify generated files are committed
         run: git diff --exit-code
+
+  bundle-builder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build amd64 bundle builder for execution tests
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: build/bundle/Dockerfile
+          build-args: VCS_REF=${{ github.sha }}
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ictsc-kocto-bundle-builder:test
+          cache-from: type=gha,scope=bundle-builder
+          cache-to: type=gha,mode=max,scope=bundle-builder
+      - name: Generate and inspect an offline bundle without privileges
+        env:
+          BUILDER_IMAGE: ictsc-kocto-bundle-builder:test
+          BUNDLE_TEST_REPOSITORY: https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          BUNDLE_TEST_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash hack/test-bundle-builder.sh
+      - name: Generate a mixed-image bundle with inherited env-files
+        env:
+          BUILDER_IMAGE: ictsc-kocto-bundle-builder:test
+          BUNDLE_TEST_REPOSITORY: https://github.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          BUNDLE_TEST_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+          BUNDLE_TEST_DIRECTORY: test/fixtures/offline-lab-multi
+          BUNDLE_TEST_TOPOLOGY: topologies/three-nodes.yml
+          BUNDLE_TEST_EXPECTED_NODES: '3'
+          BUNDLE_TEST_EXPECTED_IMAGES: '2'
+        run: bash hack/test-bundle-builder.sh

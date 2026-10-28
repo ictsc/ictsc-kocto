@@ -6,6 +6,7 @@ require (
 	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.7.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
+	go.yaml.in/yaml/v3 v3.0.5
 	gopkg.in/evanphx/json-patch.v4 v4.13.0
 	k8s.io/api v0.37.1
 	k8s.io/apiextensions-apiserver v0.37.0
@@ -82,7 +83,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.61.0 // indirect

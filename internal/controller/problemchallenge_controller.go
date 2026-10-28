@@ -205,6 +205,12 @@ func (r *ProblemChallengeReconciler) acquireProblem(ctx context.Context, c *labv
 		result, e := r.waitChallenge(ctx, c, "ProblemNotFound", "Waiting for the referenced Problem", false)
 		return nil, false, result, e
 	}
+	// Bundle PVC snapshot/clone support needs a separate contract. Reject before
+	// acquiring the lock so unsupported author VMs are not stopped or cloned.
+	if p.Status.BundleRef != nil {
+		result, e := r.failChallenge(ctx, c, "BundleSnapshotUnsupported", "Snapshot and clone of bundle-backed Problems are not supported yet")
+		return nil, false, result, e
+	}
 	if c.Status.SourceProblem != nil && (c.Status.SourceProblem.UID != p.UID || c.Status.SourceProblem.Generation != p.Generation) {
 		result, e := r.failChallenge(ctx, c, "SourceProblemChanged", "Problem identity or generation changed")
 		return nil, false, result, e

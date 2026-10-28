@@ -297,3 +297,34 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+### ProblemのオフラインContainerlab bundle
+
+管理者が信頼済みbuilder imageを `--bundle-builder-image` へ指定すると、新規Problemの
+`spec.source`をKubernetes Jobで取得・bundle化し、追加PVCとしてVMへ渡します。
+共通Flatcarイメージは `machine.image.containerDisk`、問題データはbundleという分担です。
+Flatcarはbundleをroot側へ取り込み、Containerlabを起動します。ゲストの外部ネットワーク接続は不要です。
+サンプルは [lab_v1alpha1_problem_bundle.yaml](config/samples/lab_v1alpha1_problem_bundle.yaml) を使います。
+
+現在の入力条件は次のとおりです。
+
+- 公開GitHub HTTPSリポジトリと完全な小文字40桁のcommit SHAを指定します。submodule、Git LFS、symlink、Ansibleは未対応です。
+- 各ノードに公開レジストリのimageを明示します。digest参照（`image@sha256:...`）は、現在のDocker archive形式との組み合わせでは未対応なので拒否します。タグは可変のため、GitのSHAだけではイメージ内容の完全な再現性は保証しません。
+- ゲストのruntimeはDockerです。`image-pull-policy`は省略、`IfNotPresent`、`Never`を使用します。`Always`とDocker以外のruntimeは、`defaults`・`kinds`・`groups`を含むいずれの定義でも拒否します。ノードで上書きされる定義も検査します。
+- `directory`以下の関連ファイルを保持し、`topologyFile`をゲストの`/opt/kocto/lab/topology.clab.yml`へ配置します。`startup-config`・`license`・`binds`・`env-files`のローカル相対パスは、元のトポロジーの位置を基準に補正します。`directory`内に収まる`../`参照は利用できます。
+- ファイル参照の絶対パス・URL・環境変数・テンプレートは未対応です。`env-files`などの入力ファイルは存在する通常ファイルが必要です。`__clabNodeName__`等を使った動的なファイル参照や、配置後に生成されるファイルへのbindも対象外です。
+- labは1Gi/10000ファイル、トポロジーは1Mi、生成ディスクは6Giまでです。rootは14Gi以上を指定し、Dockerへの展開と作問に必要な空き容量も確保してください。
+- builder imageのpull Secretは、そのimageを取得するためのものです。問題用OCIイメージの認証情報をJobへ渡す機能はありません。
+
+Job完了・PVC Bound・writer Podの解放後にVMを作成します。失敗したJobや欠落した記録済みPVCを
+自動再生成せず、作問済みデータを保護します。既存Problemへの後付け、source更新、bundle付き
+ProblemChallengeは対象外です。
+
+`BundleReady=True`はbundle準備、`VMReady=True`はVM起動を示します。ゲストのContainerlab展開や
+各`exec`の成功を保証しません。現在のContainerlabでは`exec`失敗がdeployの終了コードへ伝播しない
+場合があるため、`journalctl -b -u kocto-bundle -u kocto-clab`、コンテナの設定、実際の通信で確認します。
+トポロジー全体の意味検証をbuilderが代行するものではありません。
+
+Ceph RBD・KubeVirt・Flatcar上で、Alpine 2ノードの自動展開・通信・再起動後の復旧を確認しています。
+任意のkindやネットワーク構成の動作を保証するものではありません。CIではraw/ext4・manifest・amd64と、
+[異なる2イメージと共通env-filesのfixture](test/fixtures/offline-lab-multi/topologies/three-nodes.yml)も検査します。

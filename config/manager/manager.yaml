@@ -63,6 +63,9 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          # CI injects --bundle-builder-image=<published digest> and an optional
+          # --bundle-builder-pull-secret. Base manifests keep bundles disabled.
+          # The Secret must exist in each Problem namespace; it is not copied.
         image: controller:latest
         name: manager
         ports:
