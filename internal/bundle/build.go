@@ -288,6 +288,11 @@ func Stage(directory, topology, destination string) error {
 	}
 	archives := map[string]string{}
 	for _, definition := range definitions {
+		// Validate common definitions too. Reject incompatible declarations even
+		// when a node overrides them, rather than reimplementing clab inheritance.
+		if err := validateOfflineSettings(definition); err != nil {
+			return err
+		}
 		value, exists := definition["image"]
 		if !exists {
 			continue
@@ -296,6 +301,11 @@ func Stage(directory, topology, destination string) error {
 		if !ok || !imagePattern.MatchString(image) || strings.Contains(image, "://") {
 			return fmt.Errorf("invalid registry image %v", value)
 		}
+		// The pinned upstream script also uses this reference as the destination
+		// docker-archive tag. That transport cannot preserve digest references.
+		if strings.Contains(image, "@") {
+			return fmt.Errorf("digest image references are not supported by the offline bundle archive: %s; use a registry tag", image)
+		}
 		archive := strings.NewReplacer("/", "_", ":", "_", "@", "_").Replace(image)
 		if previous, exists := archives[archive]; exists && previous != image {
 			return fmt.Errorf("image archive name collision between %s and %s", previous, image)
@@ -303,7 +313,7 @@ func Stage(directory, topology, destination string) error {
 		archives[archive] = image
 	}
 	base := filepath.Dir(filepath.FromSlash(topology))
-	rebase := func(value string) (string, error) {
+	rebase := func(value string, requireFile bool) (string, error) {
 		if filepath.IsAbs(value) || strings.ContainsAny(value, "$\x00\n\r\\") || strings.Contains(value, "://") || strings.Contains(value, "{{") {
 			return "", fmt.Errorf("only local relative file references are supported: %q", value)
 		}
@@ -311,8 +321,12 @@ func Stage(directory, topology, destination string) error {
 		if rel == ".." || strings.HasPrefix(rel, "../") {
 			return "", fmt.Errorf("file reference leaves source.directory: %q", value)
 		}
-		if _, err := os.Stat(filepath.Join(destination, rel)); err != nil {
+		info, err := os.Stat(filepath.Join(destination, rel))
+		if err != nil {
 			return "", fmt.Errorf("file reference %q: %w", value, err)
+		}
+		if requireFile && !info.Mode().IsRegular() {
+			return "", fmt.Errorf("file reference must be a regular file: %q", value)
 		}
 		return "/opt/kocto/lab/" + filepath.ToSlash(rel), nil
 	}
@@ -330,11 +344,28 @@ func Stage(directory, topology, destination string) error {
 			if key == "startup-config" && strings.Contains(value, "\n") {
 				continue
 			}
-			value, err := rebase(value)
+			value, err := rebase(value, true)
 			if err != nil {
 				return err
 			}
 			definition[key] = value
+		}
+		if child, exists := definition["env-files"]; exists {
+			files, ok := child.([]any)
+			if !ok {
+				return fmt.Errorf("env-files must be a list")
+			}
+			for index, file := range files {
+				value, ok := file.(string)
+				if !ok {
+					return fmt.Errorf("env-files entries must be strings")
+				}
+				value, err := rebase(value, true)
+				if err != nil {
+					return fmt.Errorf("env-files: %w", err)
+				}
+				files[index] = value
+			}
 		}
 		if child, exists := definition["binds"]; exists {
 			binds, ok := child.([]any)
@@ -350,7 +381,7 @@ func Stage(directory, topology, destination string) error {
 				if len(parts) < 2 || len(parts) > 3 || !strings.HasPrefix(parts[1], "/") {
 					return fmt.Errorf("unsupported bind %q", value)
 				}
-				source, err := rebase(parts[0])
+				source, err := rebase(parts[0], false)
 				if err != nil {
 					return err
 				}
@@ -370,4 +401,28 @@ func Stage(directory, topology, destination string) error {
 		return err
 	}
 	return os.WriteFile(canonical, data, 0640)
+}
+
+func validateOfflineSettings(definition map[string]any) error {
+	if value, exists := definition["image-pull-policy"]; exists {
+		policy, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("image-pull-policy must be a string")
+		}
+		// clab's pull policy parser is case insensitive and trims whitespace.
+		switch strings.ToLower(strings.TrimSpace(policy)) {
+		case "", "ifnotpresent", "never":
+		case "always":
+			return fmt.Errorf("image-pull-policy Always is incompatible with the offline guest; use IfNotPresent or Never")
+		default:
+			return fmt.Errorf("unsupported image-pull-policy %q; use IfNotPresent or Never", policy)
+		}
+	}
+	if value, exists := definition["runtime"]; exists {
+		runtime, ok := value.(string)
+		if !ok || runtime != "" && runtime != "docker" {
+			return fmt.Errorf("only the docker runtime is supported by the offline bundle guest")
+		}
+	}
+	return nil
 }

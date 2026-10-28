@@ -6,6 +6,8 @@ set -euo pipefail
 : "${BUNDLE_TEST_COMMIT:?set the exact published commit to test}"
 source_directory=${BUNDLE_TEST_DIRECTORY:-test/fixtures/offline-lab}
 topology=${BUNDLE_TEST_TOPOLOGY:-topologies/two-nodes.yml}
+expected_nodes=${BUNDLE_TEST_EXPECTED_NODES:-2}
+expected_images=${BUNDLE_TEST_EXPECTED_IMAGES:-1}
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 run_directory=$(mktemp -d)
 run_id=$(basename "$run_directory")
@@ -31,6 +33,7 @@ docker run --rm --platform linux/amd64 --user 107:107 --read-only \
     "--directory=$source_directory" "--topology=$topology"
 docker run --rm --platform linux/amd64 --user 107:107 --read-only --network none \
     --cap-drop ALL --security-opt no-new-privileges --memory 2g --cpus 2 \
+    -e "BUNDLE_TEST_EXPECTED_NODES=$expected_nodes" -e "BUNDLE_TEST_EXPECTED_IMAGES=$expected_images" \
     -v "$disk_volume:/disk:ro" -v "$work_volume:/tmp" \
     --mount "type=bind,source=$repo_root/hack/inspect-bundle.sh,target=/inspect-bundle.sh,readonly" \
     --entrypoint bash "$BUILDER_IMAGE" /inspect-bundle.sh

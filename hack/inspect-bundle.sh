@@ -29,14 +29,38 @@ test -f lab/topology.clab.yml
 test -d images
 sha256sum --check manifest.sha256
 test "$(sha256sum manifest.sha256 | cut -d' ' -f1)" = "$(cat bundle.id)"
-yq -e '(.topology.nodes | length) == 2' lab/topology.clab.yml
-yq -e 'all(.topology.nodes[]; .image | startswith("alpine:"))' lab/topology.clab.yml
+# shellcheck disable=SC2016 # $nodes is a jq variable, not a shell variable.
+yq -e --argjson nodes "${BUNDLE_TEST_EXPECTED_NODES:-2}" \
+    '(.topology.nodes | length) == $nodes' lab/topology.clab.yml
+yq -r '[.topology.nodes[].image] | unique | .[]' lab/topology.clab.yml > /tmp/bundle-image-references
+mapfile -t references < /tmp/bundle-image-references
+yq -r '[.topology.defaults, (.topology.kinds // {} | .[]),
+    (.topology.groups // {} | .[]), .topology.nodes[]] |
+    [.[] | .["env-files"] // [] | .[]] | unique | .[]' lab/topology.clab.yml > /tmp/bundle-env-files
+mapfile -t env_files < /tmp/bundle-env-files
+for env_file in "${env_files[@]}"; do
+    case "$env_file" in
+        /opt/kocto/lab/*) test -f "lab/${env_file#/opt/kocto/lab/}" ;;
+        *) echo "Unrebased env-file: $env_file" >&2; exit 1 ;;
+    esac
+done
+archives=(images/*.tar)
+test "${#archives[@]}" -eq "${BUNDLE_TEST_EXPECTED_IMAGES:-1}"
+test "${#references[@]}" -eq "${BUNDLE_TEST_EXPECTED_IMAGES:-1}"
+tags=/tmp/bundle-image-tags
+: > "$tags"
 for archive in images/*.tar; do
     directory=$(mktemp -d /tmp/image-inspection.XXXXXX)
     tar -xf "$archive" -C "$directory" manifest.json
     config=$(jq -r '.[0].Config' "$directory/manifest.json")
+    jq -r '.[].RepoTags[]' "$directory/manifest.json" >> "$tags"
     tar -xf "$archive" -C "$directory" "$config"
     jq -e '.architecture == "amd64" and .os == "linux"' "$directory/$config"
+done
+for reference in "${references[@]}"; do
+    # Docker archives normalize short names such as alpine:3.20.
+    grep -Fxq -- "$reference" "$tags" || grep -Fxq -- "docker.io/library/$reference" "$tags" \
+        || grep -Fxq -- "docker.io/$reference" "$tags"
 done
 free_blocks=$(awk '/^Free blocks:/ {print $3}' /tmp/ext4-info.txt)
 all_blocks=$(awk '/^Block count:/ {print $3}' /tmp/ext4-info.txt)

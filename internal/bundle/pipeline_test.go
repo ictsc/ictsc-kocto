@@ -30,7 +30,7 @@ import (
 // without network access or a Docker daemon. It does not validate qcow2/ext4.
 func TestBuildPublication(t *testing.T) {
 	for _, test := range []struct {
-		name, size, convertFail           string
+		name, size, convertFail, topology string
 		wrongCommit, cancelled, wantError bool
 	}{
 		{name: "complete"},
@@ -38,6 +38,9 @@ func TestBuildPublication(t *testing.T) {
 		{name: "too large", size: "6442450945", wantError: true},
 		{name: "conversion failure", convertFail: "1", wantError: true},
 		{name: "cancelled", cancelled: true, wantError: true},
+		{name: "offline pull policy", topology: "name: offline\ntopology:\n  nodes:\n    n1: {kind: linux, image: alpine:3.20, image-pull-policy: Always}\n", wantError: true},
+		{name: "missing env file", topology: "name: offline\ntopology:\n  nodes:\n    n1: {kind: linux, image: alpine:3.20, env-files: [absent.env]}\n", wantError: true},
+		{name: "digest image", topology: "name: offline\ntopology:\n  nodes:\n    n1: {kind: linux, image: 'alpine@sha256:" + strings.Repeat("a", 64) + "'}\n", wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root, err := filepath.EvalSymlinks(t.TempDir())
@@ -64,7 +67,11 @@ func TestBuildPublication(t *testing.T) {
 				return strings.TrimSpace(string(data))
 			}
 			git("init", "--template=")
-			if err := os.WriteFile(filepath.Join(repo, "custom.yml"), []byte("name: offline\ntopology:\n  nodes:\n    n1: {kind: linux, image: alpine:3.20}\n"), 0644); err != nil {
+			topology := test.topology
+			if topology == "" {
+				topology = "name: offline\ntopology:\n  nodes:\n    n1: {kind: linux, image: alpine:3.20}\n"
+			}
+			if err := os.WriteFile(filepath.Join(repo, "custom.yml"), []byte(topology), 0644); err != nil {
 				t.Fatal(err)
 			}
 			git("add", "custom.yml")
