@@ -67,6 +67,27 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestSourceHashCompatibility(t *testing.T) {
+	minimal := validSource()
+	complete := validSource()
+	complete.Directory = "nested"
+	complete.AnsiblePlaybook = new("playbook.yml")
+	for _, test := range []struct {
+		name   string
+		source labv1alpha1.ProblemSourceSpec
+		want   string
+	}{
+		{"optional fields omitted", minimal, "9efe91bc8d752548959ceec06facabf6c3a100739fe1cf908c27e827e28fca49"},
+		{"all original fields", complete, "97a5fd3840c93df4e535129612c91799414917bb698e85e1b391d9db0e8b3bbe"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := SourceHash(test.source); got != test.want {
+				t.Fatalf("recorded source hash changed: got %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
 func stageFixture(t *testing.T, topology string) (string, string) {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())

@@ -67,7 +67,16 @@ func relativePath(value string, empty bool) bool {
 }
 
 // SourceHash fixes the initial input independently of mutable builder settings.
+// The JSON fields and their order are frozen to preserve recorded hashes when
+// ProblemSourceSpec changes. New build inputs need a versioned identity scheme.
 func SourceHash(source labv1alpha1.ProblemSourceSpec) string {
-	data, _ := json.Marshal(source)
+	identity := struct {
+		Repository      string  `json:"repository"`
+		CommitHash      string  `json:"commitHash"`
+		Directory       string  `json:"directory,omitempty"`
+		TopologyFile    string  `json:"topologyFile"`
+		AnsiblePlaybook *string `json:"ansiblePlaybook,omitempty"`
+	}{source.Repository, source.CommitHash, source.Directory, source.TopologyFile, source.AnsiblePlaybook}
+	data, _ := json.Marshal(identity)
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }

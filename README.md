@@ -320,6 +320,16 @@ Job完了・PVC Bound・writer Podの解放後にVMを作成します。失敗�
 自動再生成せず、作問済みデータを保護します。既存Problemへの後付け、source更新、bundle付き
 ProblemChallengeは対象外です。
 
+Jobが再試行上限に達すると、Problemのconditionに `BundleBuildFailed` が表示されます。
+JobとそのPodの状態・ログを確認し、原因を解消してください。記録済みのJobを削除しても
+再生成されません。再ビルドするにはProblemを削除し、削除完了後にマニフェストから作り直します。
+`bundleRef`の記録後は `spec.source` を変更できないため、sourceを修正する場合は再作成前に
+マニフェストを編集してください。再作成されたProblemのUIDは元のものとは異なります。
+
+**Problemの削除は関連するVMやディスクのクリーンアップを伴います。** 必要な作問データを
+事前に退避し、削除対象と影響を確認してください。Challengeによるロック中は削除が完了するまで
+待機します。
+
 `BundleReady=True`はbundle準備、`VMReady=True`はVM起動を示します。ゲストのContainerlab展開や
 各`exec`の成功を保証しません。現在のContainerlabでは`exec`失敗がdeployの終了コードへ伝播しない
 場合があるため、`journalctl -b -u kocto-bundle -u kocto-clab`、コンテナの設定、実際の通信で確認します。
