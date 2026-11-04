@@ -240,6 +240,43 @@ spec:
                 - problemGeneration
                 - uid
                 type: object
+              bundleRef:
+                description: BundleRef fixes the first build input and resource identities.
+                  Existing Problems without it keep their root-only VM.
+                properties:
+                  builderImage:
+                    description: BuilderImage and StorageClassName are fixed when
+                      the first build is selected.
+                    type: string
+                  imagePullSecret:
+                    description: ImagePullSecret is a Secret name in the Problem namespace;
+                      credentials are never read or copied by the controller.
+                    type: string
+                  jobUID:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                  pvcUID:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                  ready:
+                    description: Ready means the builder completed, not that Containerlab
+                      deployed in the guest.
+                    type: boolean
+                  sourceHash:
+                    type: string
+                  storageClassName:
+                    type: string
+                required:
+                - builderImage
+                - sourceHash
+                - storageClassName
+                type: object
               conditions:
                 description: |-
                   Conditionsは、Problemの現在の状態を表します。
@@ -346,6 +383,9 @@ spec:
         - message: ProblemのspecはChallengeによるロック中は変更できません
           rule: '!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec
             == oldSelf.spec'
+        - message: bundle生成開始後のsourceは変更できません
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.bundleRef) || self.spec.source
+            == oldSelf.spec.source'
     served: true
     storage: true
     subresources:

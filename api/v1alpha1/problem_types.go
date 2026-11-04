@@ -176,6 +176,10 @@ type AccessEndpoint struct {
 
 // ProblemStatusはProblemの現在の状態を表します。
 type ProblemStatus struct {
+	// BundleRef fixes the first build input and resource identities. Existing Problems without it keep their root-only VM.
+	// +optional
+	BundleRef *ProblemBundleReference `json:"bundleRef,omitempty"`
+
 	// コントローラーが確認した状態を表すフィールドをここに追加します。
 	// 型を変更したらmake manifestsとmake generateを実行してください。
 
@@ -197,6 +201,27 @@ type ProblemStatus struct {
 	// ActiveChallengeは、ロックを所有するChallengeの情報を記録します。
 	// +optional
 	ActiveChallenge *ActiveChallengeStatus `json:"activeChallenge,omitempty"`
+}
+
+// ProblemBundleReference records the initial offline bundle; missing recorded resources are never rebuilt automatically.
+type ProblemBundleReference struct {
+	// +required
+	SourceHash string `json:"sourceHash"`
+	// BuilderImage and StorageClassName are fixed when the first build is selected.
+	// +required
+	BuilderImage string `json:"builderImage"`
+	// ImagePullSecret is a Secret name in the Problem namespace; credentials are never read or copied by the controller.
+	// +optional
+	ImagePullSecret string `json:"imagePullSecret,omitempty"`
+	// +required
+	StorageClassName string `json:"storageClassName"`
+	// +optional
+	PVCUID types.UID `json:"pvcUID,omitempty"`
+	// +optional
+	JobUID types.UID `json:"jobUID,omitempty"`
+	// Ready means the builder completed, not that Containerlab deployed in the guest.
+	// +optional
+	Ready bool `json:"ready,omitempty"`
 }
 
 type ProblemVMReference struct {
@@ -251,6 +276,7 @@ type ActiveChallengeStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.activeChallenge) || self.spec == oldSelf.spec",message="ProblemのspecはChallengeによるロック中は変更できません"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.bundleRef) || self.spec.source == oldSelf.spec.source",message="bundle生成開始後のsourceは変更できません"
 
 // Problemは問題環境を表すリソースです。
 type Problem struct {

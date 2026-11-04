@@ -71,6 +71,8 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var storageClass string
+	var bundleBuilderImage string
+	var bundleBuilderPullSecret string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
@@ -78,6 +80,8 @@ func main() {
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.StringVar(&storageClass, "storage-class", "", "Fallback StorageClass for Problems without spec.storage; initial disks use Filesystem/RWO. Explicit Problem storage supports Filesystem or Block with Immediate binding.")
+	flag.StringVar(&bundleBuilderImage, "bundle-builder-image", "", "Enable offline bundle builds for new Problems using this trusted builder image (prefer @sha256 digest). Existing author disks are never converted.")
+	flag.StringVar(&bundleBuilderPullSecret, "bundle-builder-pull-secret", "", "Optional builder image pull Secret name in each Problem namespace; the controller never copies credentials.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -185,10 +189,12 @@ func main() {
 	// 通常のClientは読み取りにキャッシュを使う。ロックや所有関係の判断用にAPIReaderも渡す。
 	// SetupWithManagerでProblemとその子リソースの監視を登録する。
 	if err := (&controller.ProblemReconciler{
-		Client:       mgr.GetClient(),
-		APIReader:    mgr.GetAPIReader(),
-		Scheme:       mgr.GetScheme(),
-		StorageClass: storageClass,
+		Client:                  mgr.GetClient(),
+		APIReader:               mgr.GetAPIReader(),
+		Scheme:                  mgr.GetScheme(),
+		StorageClass:            storageClass,
+		BundleBuilderImage:      bundleBuilderImage,
+		BundleBuilderPullSecret: bundleBuilderPullSecret,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "problem")
 		os.Exit(1)

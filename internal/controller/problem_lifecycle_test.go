@@ -24,6 +24,7 @@ import (
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apiMeta "k8s.io/apimachinery/pkg/api/meta"
@@ -52,6 +53,7 @@ type problemFixture struct {
 func newProblemFixture() *problemFixture {
 	scheme := runtime.NewScheme()
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
+	Expect(batchv1.AddToScheme(scheme)).To(Succeed())
 	Expect(virtv1.AddToScheme(scheme)).To(Succeed())
 	Expect(cdiv1.AddToScheme(scheme)).To(Succeed())
 	Expect(labv1alpha1.AddToScheme(scheme)).To(Succeed())
@@ -66,7 +68,7 @@ func newProblemFixture() *problemFixture {
 	// managed-fieldsの追跡処理がKubeVirt VMIのuint64フィールドを扱えないため、通常のUpdateで検証する。
 	cl := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjectTracker(k8stesting.NewObjectTracker(scheme, serializer.NewCodecFactory(scheme).UniversalDecoder())).WithObjects(problem).
-		WithStatusSubresource(&labv1alpha1.Problem{}, &cdiv1.DataVolume{}, &virtv1.VirtualMachine{}, &corev1.PersistentVolumeClaim{}).
+		WithStatusSubresource(&batchv1.Job{}, &labv1alpha1.Problem{}, &cdiv1.DataVolume{}, &virtv1.VirtualMachine{}, &corev1.PersistentVolumeClaim{}).
 		WithInterceptorFuncs(interceptor.Funcs{Create: func(ctx context.Context, cl client.WithWatch, object client.Object, options ...client.CreateOption) error {
 			created++
 			object.SetUID(types.UID(fmt.Sprintf("created-%d", created)))

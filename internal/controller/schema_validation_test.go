@@ -19,6 +19,7 @@ package controller
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -56,6 +57,31 @@ var _ = Describe("API transition validation", func() {
 		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, problem)).To(Succeed()) })
 		return problem
 	}
+
+	It("freezes source after selecting a bundle while retaining CPU updates", func() {
+		p := createProblem()
+		p.Status.BundleRef = &labv1alpha1.ProblemBundleReference{SourceHash: "fixed", BuilderImage: "example.invalid/builder", StorageClassName: "test"}
+		Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+		p.Spec.Machine.CPU = 2
+		Expect(k8sClient.Update(ctx, p)).To(Succeed())
+		p.Spec.Source.CommitHash = "changed"
+		err := k8sClient.Update(ctx, p)
+		Expect(apierrors.IsInvalid(err)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("bundle"))
+	})
+
+	It("accepts builder Jobs and PVCs and matches the API-defaulted Job", func() {
+		p := createProblem()
+		p.Status.BundleRef = &labv1alpha1.ProblemBundleReference{SourceHash: "fixed", BuilderImage: "example.invalid/builder", StorageClassName: "test"}
+		pvc, job := problemBundlePVC(p), problemBundleJob(p)
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, pvc)).To(Succeed()) })
+		Expect(k8sClient.Create(ctx, job)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, job)).To(Succeed()) })
+		actual := &batchv1.Job{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(job), actual)).To(Succeed())
+		Expect(bundleJobMatches(p, actual)).To(BeTrue())
+	})
 
 	lockProblem := func(problem *labv1alpha1.Problem) {
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(problem), problem)).To(Succeed())

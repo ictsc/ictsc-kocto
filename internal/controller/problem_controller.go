@@ -19,8 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,7 +50,9 @@ type ProblemReconciler struct {
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	// StorageClassはstorageを省略したProblemの初回取り込みにだけ使う互換用の既定値。
-	StorageClass string
+	StorageClass            string
+	BundleBuilderImage      string
+	BundleBuilderPullSecret string
 }
 
 // 以下のマーカーから、controllerが各リソースを操作するためのRBACを生成する。
@@ -58,8 +62,9 @@ type ProblemReconciler struct {
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachines,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=kubevirt.io,resources=virtualmachineinstances,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;delete
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 
 func (r *ProblemReconciler) reader() client.Reader {
 	// 起動や所有関係の判断にはAPIReaderで最新の状態を読み、キャッシュの反映待ちを避ける。
@@ -103,6 +108,10 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if problem.Status.ActiveChallenge != nil {
 		return r.haltLockedProblem(ctx, problem, vm, vmErr)
 	}
+	// Bundle builds are asynchronous; no VM is created before the writer finishes.
+	if ready, result, err := r.ensureProblemBundle(ctx, problem, vmErr == nil); err != nil || !ready {
+		return result, err
+	}
 	// DataVolumeは初回取り込みをCDIへ依頼するリソースで、実際の作問データは対応するPVCに入る。
 	dv := &cdiv1.DataVolume{}
 	diskErr := r.reader().Get(ctx, types.NamespacedName{Namespace: problem.Namespace, Name: diskName}, dv)
@@ -121,10 +130,14 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			return ctrl.Result{}, err
 		}
 		// 既定値が必要なのは初回だけ。既存ディスクの復旧/停止/削除にはmanager設定を使わない。
-		if problem.Spec.Storage == nil && r.StorageClass == "" {
+		storageClass := r.StorageClass
+		if problem.Status.BundleRef != nil {
+			storageClass = problem.Status.BundleRef.StorageClassName
+		}
+		if problem.Spec.Storage == nil && storageClass == "" {
 			return r.problemState(ctx, problem, "StorageClassRequired", "Specify spec.storage or configure --storage-class before provisioning", false, false, nil, nil)
 		}
-		dv = problemDataVolume(problem, r.StorageClass)
+		dv = problemDataVolume(problem, storageClass)
 		// Problemを所有者にすることで、GCとOwnsによる変更通知の対象にする。
 		if err := controllerutil.SetControllerReference(problem, dv, r.Scheme); err != nil {
 			return ctrl.Result{}, err
@@ -208,8 +221,7 @@ func (r *ProblemReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.problemState(ctx, problem, "ResourceConflict", "Author VM has no instance template", false, false, nil, diskRef)
 	}
 	// 管理するroot PVC以外が接続されていたら、設定変更で上書きせず競合として報告する。
-	volumes := vm.Spec.Template.Spec.Volumes
-	if len(volumes) != 1 || volumes[0].Name != "root" || volumes[0].PersistentVolumeClaim == nil || volumes[0].PersistentVolumeClaim.ClaimName != diskName {
+	if !problemVolumesMatch(problem, vm) {
 		return r.problemState(ctx, problem, "ResourceConflict", "Author VM does not reference the managed root PVC", false, false, nil, diskRef)
 	}
 	ref := &labv1alpha1.ProblemVMReference{VMName: vm.Name, UID: vm.UID}
@@ -375,6 +387,17 @@ func (r *ProblemReconciler) problemState(ctx context.Context, observed *labv1alp
 	if diskRef != nil {
 		current.Status.DiskRef = diskRef
 	}
+
+	if ref := current.Status.BundleRef; ref != nil {
+		condition := metav1.Condition{Type: "BundleReady", Status: metav1.ConditionFalse, Reason: "BundleBuildPending", Message: "Waiting for the offline bundle builder", ObservedGeneration: current.Generation}
+		if ref.Ready {
+			condition.Status, condition.Reason, condition.Message = metav1.ConditionTrue, "BundleBuilt", "Bundle disk is ready; guest deployment is not observed"
+		}
+		if strings.HasPrefix(reason, "Bundle") || reason == "ResourceConflict" {
+			condition.Status, condition.Reason, condition.Message = metav1.ConditionFalse, reason, message
+		}
+		apiMeta.SetStatusCondition(&current.Status.Conditions, condition)
+	}
 	locked := current.Status.ActiveChallenge != nil
 	// 観測中にロックの有無が変わった場合、その観測結果ではReadyを更新しない。
 	if locked != (observed.Status.ActiveChallenge != nil) {
@@ -511,6 +534,9 @@ func (r *ProblemReconciler) deleteProblem(ctx context.Context, problem *labv1alp
 	if !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
+	if done, err := r.cleanupProblemBundle(ctx, problem); err != nil || !done {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
+	}
 	// 子リソースが消えた後にロックを再確認してから、Problem自身の削除を許可する。
 	if err := r.reader().Get(ctx, client.ObjectKeyFromObject(problem), problem); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -561,6 +587,7 @@ func (r *ProblemReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&labv1alpha1.Problem{}).
 		Owns(&virtv1.VirtualMachine{}).
 		Owns(&cdiv1.DataVolume{}).
+		Owns(&batchv1.Job{}).
 		Watches(&virtv1.VirtualMachineInstance{}, handler.EnqueueRequestsFromMapFunc(r.problemEvents)).
 		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.problemEvents)).
 		Watches(&corev1.PersistentVolumeClaim{}, handler.EnqueueRequestsFromMapFunc(r.problemEvents)).

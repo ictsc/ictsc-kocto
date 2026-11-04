@@ -1,0 +1,35 @@
+name: kocto-offline-multi
+topology:
+  defaults:
+    image-pull-policy: Never
+    env-files: [../env/defaults.env]
+  kinds:
+    linux:
+      env-files: [../env/kind.env]
+  groups:
+    clients:
+      env-files: [../env/group.env]
+  nodes:
+    host1:
+      kind: linux
+      image: alpine:3.20
+      binds: [../configs:/kocto:ro]
+      exec:
+        - ip addr replace 10.10.10.1/24 dev eth1
+        - ip addr replace 10.20.20.1/24 dev eth2
+    host2:
+      kind: linux
+      group: clients
+      image: busybox:1.37
+      env-files: [../env/node.env]
+      exec:
+        - sh -c 'ip addr del 10.10.10.2/24 dev eth1 2>/dev/null; ip addr add 10.10.10.2/24 dev eth1'
+    host3:
+      kind: linux
+      group: clients
+      image: alpine:3.20
+      exec:
+        - ip addr replace 10.20.20.3/24 dev eth1
+  links:
+    - endpoints: [host1:eth1, host2:eth1]
+    - endpoints: [host1:eth2, host3:eth1]

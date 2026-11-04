@@ -1,0 +1,27 @@
+# Requires a deployed manager configured with --bundle-builder-image=<trusted image digest>.
+# Replace commitHash with a published commit that contains test/fixtures/offline-lab.
+# Select the target namespace with kubectl --namespace.
+# This sample is deliberately not included in config/samples/kustomization.yaml.
+apiVersion: lab.icttoracon.net/v1alpha1
+kind: Problem
+metadata:
+  name: offline-containerlab
+spec:
+  source:
+    repository: https://github.com/ictsc/ictsc-kocto
+    commitHash: REPLACE_WITH_PUBLISHED_40_CHARACTER_COMMIT_SHA
+    directory: test/fixtures/offline-lab
+    topologyFile: topologies/two-nodes.yml
+  machine:
+    cpu: 2
+    memory: 4Gi
+    disk: 14Gi
+    image:
+      containerDisk: ghcr.io/ictsc/kocto-clab-image@sha256:05f1d1c50ef7f09338689089851690830e569db59e59faa96d5493b8ab3ff350
+  storage:
+    storageClassName: kocto-ceph-rbd-block
+    volumeMode: Block
+  access:
+    - name: host1
+      node: host1
+      interface: eth1
