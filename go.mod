@@ -6,7 +6,8 @@ require (
 	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.7.0
 	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.44.0
-	go.yaml.in/yaml/v3 v3.0.6
+	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v4 v4.0.0
 	gopkg.in/evanphx/json-patch.v4 v4.13.0
 	k8s.io/api v0.37.1
 	k8s.io/apiextensions-apiserver v0.37.0
