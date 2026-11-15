@@ -45,6 +45,8 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 		return nil
 	}
 	cloneName, vmName, pvcName := challengeTeamNames(c, team.ID)
+	bundleName := vmName + "-bundle"
+	hasBundle := c.Status.SourceProblem != nil && c.Status.SourceProblem.BundlePVCUID != ""
 	clone := &clonev1.VirtualMachineClone{}
 	err := r.reader().Get(ctx, types.NamespacedName{Name: cloneName, Namespace: c.Namespace}, clone)
 	if apierrors.IsNotFound(err) {
@@ -53,6 +55,17 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 			return nil
 		}
 		if team.CloneRef == nil {
+			if hasBundle {
+				occupied := &corev1.PersistentVolumeClaim{}
+				err := r.reader().Get(ctx, types.NamespacedName{Name: bundleName, Namespace: c.Namespace}, occupied)
+				if err == nil {
+					failTeam(c, team, "ResourceConflict", "Team bundle PVC name is occupied")
+					return nil
+				}
+				if !apierrors.IsNotFound(err) {
+					return err
+				}
+			}
 			// 新規Cloneが同名のVM/PVCを上書きしないよう、作成前に占有を確認する。
 			for _, object := range []client.Object{&virtv1.VirtualMachine{}, &corev1.PersistentVolumeClaim{}} {
 				name := vmName
@@ -145,9 +158,33 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 		return nil
 	}
 	volumes := vm.Spec.Template.Spec.Volumes
-	if len(volumes) != 1 || volumes[0].Name != "root" || volumes[0].PersistentVolumeClaim == nil || volumes[0].PersistentVolumeClaim.ClaimName != pvcName {
+	expectedVolumes := 1
+	if hasBundle {
+		expectedVolumes++
+	}
+	if len(volumes) != expectedVolumes || volumes[0].Name != "root" || volumes[0].PersistentVolumeClaim == nil || volumes[0].PersistentVolumeClaim.ClaimName != pvcName {
 		failTeam(c, team, "ResourceConflict", "Team VM does not use its dedicated root PVC")
 		return nil
+	}
+	if hasBundle {
+		if volumes[1].Name != "bundle" || volumes[1].PersistentVolumeClaim == nil || volumes[1].PersistentVolumeClaim.ClaimName != bundleName || volumes[1].PersistentVolumeClaim.ReadOnly {
+			failTeam(c, team, "ResourceConflict", "Team VM does not use its dedicated bundle PVC")
+			return nil
+		}
+		if len(vm.Spec.Template.Spec.Domain.Devices.Disks) != 2 {
+			failTeam(c, team, "ResourceConflict", "Team VM has unexpected disks")
+			return nil
+		}
+		readOnly := false
+		for _, disk := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+			if disk.Name == "bundle" && disk.Disk != nil && disk.Disk.ReadOnly {
+				readOnly = true
+			}
+		}
+		if !readOnly {
+			failTeam(c, team, "ResourceConflict", "Team bundle disk is not read-only")
+			return nil
+		}
 	}
 	team.VMRef = resourceRef(vm)
 	pvc := &corev1.PersistentVolumeClaim{}
@@ -164,6 +201,25 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 			return nil
 		}
 		return err
+	}
+	var bundlePVC *corev1.PersistentVolumeClaim
+	if hasBundle {
+		bundlePVC = &corev1.PersistentVolumeClaim{}
+		if err := r.reader().Get(ctx, types.NamespacedName{Name: bundleName, Namespace: c.Namespace}, bundlePVC); err != nil {
+			if apierrors.IsNotFound(err) {
+				failTeam(c, team, "DiskMissing", "The restored team bundle PVC is missing")
+				return nil
+			}
+			return err
+		}
+		if err := r.adoptTeamDisk(ctx, c, team, bundlePVC, "bundle"); err != nil {
+			if failure, ok := err.(*challengeResourceError); ok {
+				failTeam(c, team, failure.reason, failure.message)
+				return nil
+			}
+			return err
+		}
+		team.BundlePVCRef = resourceRef(bundlePVC)
 	}
 	if initialAdoption {
 		if err := controllerutil.SetControllerReference(c, vm, r.Scheme); err != nil {
@@ -185,7 +241,7 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 	if err := r.saveChallenge(ctx, c); err != nil {
 		return err
 	}
-	if pvc.Status.Phase != corev1.ClaimBound || !pvc.DeletionTimestamp.IsZero() || vm.Status.RestoreInProgress != nil {
+	if pvc.Status.Phase != corev1.ClaimBound || !pvc.DeletionTimestamp.IsZero() || (bundlePVC != nil && (bundlePVC.Status.Phase != corev1.ClaimBound || !bundlePVC.DeletionTimestamp.IsZero())) || vm.Status.RestoreInProgress != nil {
 		teamCondition(c, team, "Ready", false, "DiskPending", "Waiting for a bound PVC and completed restore")
 		return nil
 	}
@@ -195,18 +251,36 @@ func (r *ProblemChallengeReconciler) reconcileTeam(ctx context.Context, c *labv1
 // 復元元のCSI snapshotと固定PVC名を照合してから所有参照を追加する。
 // 元の作問PVCや他チームのPVCは採用しない。GCだけに頼らず、UIDを記録して削除時にも確認する。
 func (r *ProblemChallengeReconciler) adoptTeamPVC(ctx context.Context, c *labv1alpha1.ProblemChallenge, team *labv1alpha1.ProblemChallengeTeamStatus, pvc *corev1.PersistentVolumeClaim) error {
+	return r.adoptTeamDisk(ctx, c, team, pvc, "root")
+}
+
+func (r *ProblemChallengeReconciler) adoptTeamDisk(ctx context.Context, c *labv1alpha1.ProblemChallenge, team *labv1alpha1.ProblemChallengeTeamStatus, pvc *corev1.PersistentVolumeClaim, disk string) error {
 	_, vmName, pvcName := challengeTeamNames(c, team.ID)
-	snapshotName, sourcePVC, err := r.rootSnapshot(ctx, c)
+	ref := team.PVCRef
+	if disk == "bundle" {
+		pvcName = vmName + "-bundle"
+		ref = team.BundlePVCRef
+	}
+	snapshotName, sourcePVC, err := r.diskSnapshot(ctx, c, disk)
 	if err != nil {
 		return err
 	}
-	if pvc.Name != pvcName || pvc.UID == sourcePVC.UID || (team.PVCRef != nil && team.PVCRef.UID != pvc.UID) {
+	if pvc.Name != pvcName || pvc.UID == sourcePVC.UID || (ref != nil && ref.UID != pvc.UID) {
 		return resourceFailure("ResourceConflict", "Team PVC identity does not match")
 	}
-	matches := pvc.Spec.DataSource != nil && pvc.Spec.DataSource.APIGroup != nil && *pvc.Spec.DataSource.APIGroup == "snapshot.storage.k8s.io" && pvc.Spec.DataSource.Kind == "VolumeSnapshot" && pvc.Spec.DataSource.Name == snapshotName
+	matches := false
+	if source := pvc.Spec.DataSource; source != nil {
+		if source.APIGroup == nil || *source.APIGroup != "snapshot.storage.k8s.io" || source.Kind != "VolumeSnapshot" || source.Name != snapshotName {
+			return resourceFailure("ResourceConflict", "Team PVC data source does not match its snapshot")
+		}
+		matches = true
+	}
 	if pvc.Spec.DataSourceRef != nil {
 		source := pvc.Spec.DataSourceRef
-		matches = matches || (source.APIGroup != nil && *source.APIGroup == "snapshot.storage.k8s.io" && source.Kind == "VolumeSnapshot" && source.Name == snapshotName && (source.Namespace == nil || *source.Namespace == c.Namespace))
+		if source.APIGroup == nil || *source.APIGroup != "snapshot.storage.k8s.io" || source.Kind != "VolumeSnapshot" || source.Name != snapshotName || (source.Namespace != nil && *source.Namespace != c.Namespace) {
+			return resourceFailure("ResourceConflict", "Team PVC data source reference does not match its snapshot")
+		}
+		matches = true
 	}
 	if !matches {
 		return resourceFailure("ResourceConflict", "Team PVC was not restored from this root snapshot")
@@ -217,7 +291,7 @@ func (r *ProblemChallengeReconciler) adoptTeamPVC(ctx context.Context, c *labv1a
 		return resourceFailure("ResourceConflict", "Team PVC storage does not match the saved source PVC")
 	}
 	for _, other := range c.Status.Teams {
-		if other.ID != team.ID && other.PVCRef != nil && other.PVCRef.UID == pvc.UID {
+		if other.ID != team.ID && ((other.PVCRef != nil && other.PVCRef.UID == pvc.UID) || (other.BundlePVCRef != nil && other.BundlePVCRef.UID == pvc.UID)) {
 			return resourceFailure("ResourceConflict", "Teams cannot share a PVC")
 		}
 	}

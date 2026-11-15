@@ -220,14 +220,14 @@ var _ = Describe("Offline Problem bundles", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(done).To(BeTrue())
 	})
-	It("rejects bundle-backed Challenge before locking or stopping the author VM", func() {
+	It("waits for a ready bundle before locking or stopping the author VM", func() {
 		f := newChallengeFixture()
 		f.problem.Status.BundleRef = &labv1alpha1.ProblemBundleReference{SourceHash: "fixed", BuilderImage: "builder", StorageClassName: "test"}
 		Expect(f.client.Status().Update(ctx, f.problem)).To(Succeed())
 		vm := f.vm()
 		strategy := *vm.Spec.RunStrategy
 		f.reconcileChallenge()
-		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("BundleSnapshotUnsupported"))
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Accepted").Reason).To(Equal("ProblemNotReady"))
 		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
 		Expect(f.problem.Status.ActiveChallenge).To(BeNil())
 		Expect(*f.vm().Spec.RunStrategy).To(Equal(strategy))

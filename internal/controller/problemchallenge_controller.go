@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
+	"github.com/ictsc/ictsc-kocto/internal/bundle"
 )
 
 // ProblemChallengeReconcilerはロック、保存、チーム展開、削除を進める。
@@ -205,11 +206,17 @@ func (r *ProblemChallengeReconciler) acquireProblem(ctx context.Context, c *labv
 		result, e := r.waitChallenge(ctx, c, "ProblemNotFound", "Waiting for the referenced Problem", false)
 		return nil, false, result, e
 	}
-	// Bundle PVC snapshot/clone support needs a separate contract. Reject before
-	// acquiring the lock so unsupported author VMs are not stopped or cloned.
-	if p.Status.BundleRef != nil {
-		result, e := r.failChallenge(ctx, c, "BundleSnapshotUnsupported", "Snapshot and clone of bundle-backed Problems are not supported yet")
-		return nil, false, result, e
+	if c.Status.SourceProblem != nil {
+		var bundleUID types.UID
+		var bundleHash string
+		if p.Status.BundleRef != nil {
+			bundleUID = p.Status.BundleRef.PVCUID
+			bundleHash = p.Status.BundleRef.SourceHash
+		}
+		if c.Status.SourceProblem.BundlePVCUID != bundleUID || c.Status.SourceProblem.BundleSourceHash != bundleHash {
+			result, e := r.failChallenge(ctx, c, "SourceProblemChanged", "Author bundle PVC identity changed")
+			return nil, false, result, e
+		}
 	}
 	if c.Status.SourceProblem != nil && (c.Status.SourceProblem.UID != p.UID || c.Status.SourceProblem.Generation != p.Generation) {
 		result, e := r.failChallenge(ctx, c, "SourceProblemChanged", "Problem identity or generation changed")
@@ -249,6 +256,10 @@ func (r *ProblemChallengeReconciler) acquireProblem(ctx context.Context, c *labv
 			}
 			if c.Status.SourceProblem == nil {
 				c.Status.SourceProblem = &labv1alpha1.SourceProblemReference{Name: p.Name, UID: p.UID, Generation: p.Generation}
+				if p.Status.BundleRef != nil {
+					c.Status.SourceProblem.BundlePVCUID = p.Status.BundleRef.PVCUID
+					c.Status.SourceProblem.BundleSourceHash = p.Status.BundleRef.SourceHash
+				}
 			}
 			c.Status.SourceProblem.DiskPVCUID = p.Status.DiskRef.PVCUID
 			if err := r.saveChallenge(ctx, c); err != nil {
@@ -259,6 +270,9 @@ func (r *ProblemChallengeReconciler) acquireProblem(ctx context.Context, c *labv
 				return nil, false, ctrl.Result{}, err
 			}
 			if p.UID != c.Status.SourceProblem.UID || p.Generation != c.Status.SourceProblem.Generation {
+				return nil, false, ctrl.Result{Requeue: true}, nil
+			}
+			if (p.Status.BundleRef == nil && c.Status.SourceProblem.BundlePVCUID != "") || (p.Status.BundleRef != nil && (p.Status.BundleRef.PVCUID != c.Status.SourceProblem.BundlePVCUID || p.Status.BundleRef.SourceHash != c.Status.SourceProblem.BundleSourceHash)) {
 				return nil, false, ctrl.Result{Requeue: true}, nil
 			}
 			if p.Status.ActiveChallenge != nil {
@@ -335,6 +349,23 @@ func (r *ProblemChallengeReconciler) sourceReady(ctx context.Context, p *labv1al
 	if condition == nil || condition.Status != metav1.ConditionTrue || condition.ObservedGeneration != p.Generation || p.Status.VMRef == nil || p.Status.DiskRef == nil {
 		return false, nil
 	}
+	if p.Status.BundleRef != nil {
+		ref := p.Status.BundleRef
+		if !ref.Ready || ref.PVCUID == "" || ref.SourceHash != bundle.SourceHash(p.Spec.Source) {
+			return false, nil
+		}
+		bundlePVC := &corev1.PersistentVolumeClaim{}
+		if err := r.reader().Get(ctx, types.NamespacedName{Name: problemBundleName(p), Namespace: p.Namespace}, bundlePVC); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		if bundlePVC.UID != ref.PVCUID || !ownedByProblem(bundlePVC, p) || bundlePVC.Annotations[bundleSourceAnnotation] != ref.SourceHash || bundlePVC.Status.Phase != corev1.ClaimBound || !bundlePVC.DeletionTimestamp.IsZero() {
+			return false, nil
+		}
+		expected := problemBundlePVC(p)
+		if !equality.Semantic.DeepEqual(bundlePVC.Spec.StorageClassName, expected.Spec.StorageClassName) || pvcVolumeMode(bundlePVC.Spec) != corev1.PersistentVolumeFilesystem || !equality.Semantic.DeepEqual(bundlePVC.Spec.AccessModes, expected.Spec.AccessModes) || bundlePVC.Spec.Resources.Requests.Storage().Cmp(*expected.Spec.Resources.Requests.Storage()) != 0 {
+			return false, nil
+		}
+	}
 	vm := &virtv1.VirtualMachine{}
 	dv := &cdiv1.DataVolume{}
 	pvc := &corev1.PersistentVolumeClaim{}
@@ -350,7 +381,7 @@ func (r *ProblemChallengeReconciler) sourceReady(ctx context.Context, p *labv1al
 			return false, err
 		}
 	}
-	return ownedByProblem(vm, p) && vm.UID == p.Status.VMRef.UID && vm.Status.Ready && vm.Status.ObservedGeneration >= vm.Generation && vm.DeletionTimestamp.IsZero() && ownedByProblem(dv, p) && dv.UID == p.Status.DiskRef.UID && dv.Status.Phase == cdiv1.Succeeded && dv.DeletionTimestamp.IsZero() && ownedByDataVolume(pvc, dv.UID) && p.Status.DiskRef.PVCUID != "" && pvc.UID == p.Status.DiskRef.PVCUID && pvc.Status.Phase == corev1.ClaimBound && pvc.DeletionTimestamp.IsZero(), nil
+	return ownedByProblem(vm, p) && vm.UID == p.Status.VMRef.UID && vm.Status.Ready && vm.Status.ObservedGeneration >= vm.Generation && vm.DeletionTimestamp.IsZero() && problemVolumesMatch(p, vm) && ownedByProblem(dv, p) && dv.UID == p.Status.DiskRef.UID && dv.Status.Phase == cdiv1.Succeeded && dv.DeletionTimestamp.IsZero() && ownedByDataVolume(pvc, dv.UID) && p.Status.DiskRef.PVCUID != "" && pvc.UID == p.Status.DiskRef.PVCUID && pvc.Status.Phase == corev1.ClaimBound && pvc.DeletionTimestamp.IsZero(), nil
 }
 
 // 親Problemの変更を、同じnamespaceでその名前を参照するChallengeへ通知する。

@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
+	"github.com/ictsc/ictsc-kocto/internal/bundle"
 	csiv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -43,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"k8s.io/utils/ptr"
 )
@@ -141,12 +143,25 @@ func (f *challengeFixture) finishSnapshot() {
 	sourcePVC := &corev1.PersistentVolumeClaim{}
 	Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.disk()), sourcePVC)).To(Succeed())
 	content := &snapshotv1.VirtualMachineSnapshotContent{ObjectMeta: metav1.ObjectMeta{Name: challengeSnapshotContentName(s.UID), Namespace: "default"}, Spec: snapshotv1.VirtualMachineSnapshotContentSpec{VirtualMachineSnapshotName: &s.Name, Source: snapshotv1.SourceSpec{VirtualMachine: &snapshotv1.VirtualMachine{ObjectMeta: vm.ObjectMeta, Spec: vm.Spec}}, VolumeBackups: []snapshotv1.VolumeBackup{{VolumeName: "root", PersistentVolumeClaim: snapshotv1.PersistentVolumeClaim{ObjectMeta: sourcePVC.ObjectMeta, Spec: sourcePVC.Spec}, VolumeSnapshotName: ptr.To("saved-volume")}}}, Status: &snapshotv1.VirtualMachineSnapshotContentStatus{ReadyToUse: ptr.To(true)}}
+	if f.problem.Status.BundleRef != nil {
+		bundlePVC := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: problemBundleName(f.problem), Namespace: "default"}, bundlePVC)).To(Succeed())
+		content.Spec.VolumeBackups = append(content.Spec.VolumeBackups, snapshotv1.VolumeBackup{VolumeName: "bundle", PersistentVolumeClaim: snapshotv1.PersistentVolumeClaim{ObjectMeta: bundlePVC.ObjectMeta, Spec: bundlePVC.Spec}, VolumeSnapshotName: ptr.To("saved-bundle-volume")})
+	}
 	Expect(f.client.Create(ctx, content)).To(Succeed())
 	volume := &csiv1.VolumeSnapshot{ObjectMeta: metav1.ObjectMeta{Name: "saved-volume", Namespace: "default", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(content, snapshotv1.SchemeGroupVersion.WithKind("VirtualMachineSnapshotContent"))}}, Spec: csiv1.VolumeSnapshotSpec{Source: csiv1.VolumeSnapshotSource{PersistentVolumeClaimName: &sourcePVC.Name}}, Status: &csiv1.VolumeSnapshotStatus{ReadyToUse: ptr.To(true), BoundVolumeSnapshotContentName: ptr.To("saved-storage-content")}}
 	Expect(f.client.Create(ctx, volume)).To(Succeed())
 	storage := &csiv1.VolumeSnapshotContent{ObjectMeta: metav1.ObjectMeta{Name: "saved-storage-content"}, Spec: csiv1.VolumeSnapshotContentSpec{VolumeSnapshotRef: corev1.ObjectReference{Name: volume.Name, Namespace: volume.Namespace, UID: volume.UID}, DeletionPolicy: csiv1.VolumeSnapshotContentDelete, Driver: "test.csi", Source: csiv1.VolumeSnapshotContentSource{VolumeHandle: ptr.To("source-handle")}}, Status: &csiv1.VolumeSnapshotContentStatus{ReadyToUse: ptr.To(true)}}
 	Expect(f.client.Create(ctx, storage)).To(Succeed())
 	s.Status = &snapshotv1.VirtualMachineSnapshotStatus{SourceUID: &vm.UID, VirtualMachineSnapshotContentName: &content.Name, Phase: snapshotv1.Succeeded, ReadyToUse: ptr.To(true), SnapshotVolumes: &snapshotv1.SnapshotVolumesLists{IncludedVolumes: []string{"root"}}}
+	if f.problem.Status.BundleRef != nil {
+		bundleName := problemBundleName(f.problem)
+		bundle := &csiv1.VolumeSnapshot{ObjectMeta: metav1.ObjectMeta{Name: "saved-bundle-volume", Namespace: "default", OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(content, snapshotv1.SchemeGroupVersion.WithKind("VirtualMachineSnapshotContent"))}}, Spec: csiv1.VolumeSnapshotSpec{Source: csiv1.VolumeSnapshotSource{PersistentVolumeClaimName: &bundleName}}, Status: &csiv1.VolumeSnapshotStatus{ReadyToUse: ptr.To(true), BoundVolumeSnapshotContentName: ptr.To("saved-bundle-storage")}}
+		Expect(f.client.Create(ctx, bundle)).To(Succeed())
+		bundleStorage := &csiv1.VolumeSnapshotContent{ObjectMeta: metav1.ObjectMeta{Name: "saved-bundle-storage"}, Spec: csiv1.VolumeSnapshotContentSpec{VolumeSnapshotRef: corev1.ObjectReference{Name: bundle.Name, Namespace: bundle.Namespace, UID: bundle.UID}, DeletionPolicy: csiv1.VolumeSnapshotContentDelete, Driver: "test.csi", Source: csiv1.VolumeSnapshotContentSource{VolumeHandle: ptr.To("bundle-handle")}}, Status: &csiv1.VolumeSnapshotContentStatus{ReadyToUse: ptr.To(true)}}
+		Expect(f.client.Create(ctx, bundleStorage)).To(Succeed())
+		s.Status.SnapshotVolumes.IncludedVolumes = append(s.Status.SnapshotVolumes.IncludedVolumes, "bundle")
+	}
 	Expect(f.client.Status().Update(ctx, s)).To(Succeed())
 	f.reconcileChallenge()
 }
@@ -184,6 +199,9 @@ func (f *challengeFixture) finishClone(id string) *virtv1.VirtualMachine {
 	vm := &virtv1.VirtualMachine{}
 	Expect(json.Unmarshal(data, vm)).To(Succeed())
 	vm.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName = pvcName
+	if f.problem.Status.BundleRef != nil {
+		vm.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ClaimName = vmName + "-bundle"
+	}
 	Expect(f.client.Create(ctx, vm)).To(Succeed())
 	sourcePVC := &corev1.PersistentVolumeClaim{}
 	Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.disk()), sourcePVC)).To(Succeed())
@@ -191,6 +209,14 @@ func (f *challengeFixture) finishClone(id string) *virtv1.VirtualMachine {
 	pvc.Spec.DataSource = &corev1.TypedLocalObjectReference{APIGroup: ptr.To("snapshot.storage.k8s.io"), Kind: "VolumeSnapshot", Name: "saved-volume"}
 	pvc.Spec.VolumeName = "team-pv-" + id
 	Expect(f.client.Create(ctx, pvc)).To(Succeed())
+	if f.problem.Status.BundleRef != nil {
+		bundleSource := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: problemBundleName(f.problem), Namespace: "default"}, bundleSource)).To(Succeed())
+		bundlePVC := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: vmName + "-bundle", Namespace: "default"}, Spec: *bundleSource.Spec.DeepCopy(), Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
+		bundlePVC.Spec.DataSource = &corev1.TypedLocalObjectReference{APIGroup: ptr.To("snapshot.storage.k8s.io"), Kind: "VolumeSnapshot", Name: "saved-bundle-volume"}
+		bundlePVC.Spec.VolumeName = "team-bundle-pv-" + id
+		Expect(f.client.Create(ctx, bundlePVC)).To(Succeed())
+	}
 	clone.Status.Phase = clonev1.Succeeded
 	clone.Status.TargetName = &vmName
 	Expect(f.client.Status().Update(ctx, clone)).To(Succeed())
@@ -206,7 +232,290 @@ func (f *challengeFixture) bootTeams() {
 	f.reconcileChallenge()
 }
 
+func (f *challengeFixture) enableBundle() *corev1.PersistentVolumeClaim {
+	f.problem.Status.BundleRef = &labv1alpha1.ProblemBundleReference{SourceHash: bundle.SourceHash(f.problem.Spec.Source), BuilderImage: "builder", StorageClassName: "test", Ready: true}
+	pvc := problemBundlePVC(f.problem)
+	Expect(controllerutil.SetControllerReference(f.problem, pvc, f.client.Scheme())).To(Succeed())
+	pvc.Status.Phase = corev1.ClaimBound
+	Expect(f.client.Create(ctx, pvc)).To(Succeed())
+	Expect(f.client.Status().Update(ctx, pvc)).To(Succeed())
+	f.problem.Status.BundleRef.PVCUID = pvc.UID
+	Expect(f.client.Status().Update(ctx, f.problem)).To(Succeed())
+	vm := f.vm()
+	vm.Spec.Template.Spec.Volumes = append(vm.Spec.Template.Spec.Volumes, virtv1.Volume{Name: "bundle", VolumeSource: virtv1.VolumeSource{PersistentVolumeClaim: &virtv1.PersistentVolumeClaimVolumeSource{PersistentVolumeClaimVolumeSource: corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc.Name}}}})
+	vm.Spec.Template.Spec.Domain.Devices.Disks = append(vm.Spec.Template.Spec.Domain.Devices.Disks, virtv1.Disk{Name: "bundle", DiskDevice: virtv1.DiskDevice{Disk: &virtv1.DiskTarget{Bus: virtv1.DiskBusVirtio, ReadOnly: true}}})
+	Expect(f.client.Update(ctx, vm)).To(Succeed())
+	return pvc
+}
+
 var _ = Describe("Challenge lifecycle", func() {
+	It("snapshots and restores independent read-only bundles for two teams", func() {
+		f := newChallengeFixture()
+		pvc := f.enableBundle()
+		f.bootTeams()
+		Expect(f.challenge.Status.SourceProblem.BundlePVCUID).To(Equal(pvc.UID))
+		Expect(f.challenge.Status.SnapshotRef.BundleVolumeSnapshotRef).NotTo(BeNil())
+		Expect(f.challenge.Status.SnapshotRef.BundleVolumeSnapshotContentRef).NotTo(BeNil())
+		Expect(f.challenge.Status.Teams).To(HaveLen(2))
+		Expect(f.challenge.Status.Teams[0].BundlePVCRef).NotTo(BeNil())
+		Expect(f.challenge.Status.Teams[1].BundlePVCRef).NotTo(BeNil())
+		Expect(f.challenge.Status.Teams[0].BundlePVCRef.UID).NotTo(Equal(f.challenge.Status.Teams[1].BundlePVCRef.UID))
+		for _, team := range f.challenge.Status.Teams {
+			Expect(apiMeta.IsStatusConditionTrue(team.Conditions, "Ready")).To(BeTrue())
+		}
+	})
+	It("does not adopt a replacement bundle PVC", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.bootTeams()
+		team := f.challenge.Status.Teams[0]
+		pvc := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: team.BundlePVCRef.Name, Namespace: "default"}, pvc)).To(Succeed())
+		Expect(f.client.Delete(ctx, pvc)).To(Succeed())
+		pvc.ResourceVersion = ""
+		pvc.UID = ""
+		pvc.OwnerReferences = nil
+		Expect(f.client.Create(ctx, pvc)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Teams[0].Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(pvc), pvc)).To(Succeed())
+		Expect(ownedByChallenge(pvc, f.challenge)).To(BeFalse())
+	})
+	It("fails when the restored bundle disk becomes writable after a controller restart", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.bootTeams()
+		team := f.challenge.Status.Teams[0]
+		vm := &virtv1.VirtualMachine{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: team.VMRef.Name, Namespace: "default"}, vm)).To(Succeed())
+		vm.Spec.Template.Spec.Domain.Devices.Disks[1].Disk.ReadOnly = false
+		Expect(f.client.Update(ctx, vm)).To(Succeed())
+		f.reconciler = &ProblemChallengeReconciler{Client: f.client, APIReader: f.client, Scheme: f.client.Scheme(), StartVM: f.start}
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Teams[0].Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts[vm.Name]).To(Equal(1))
+	})
+	It("fails closed if the bundle PVC is replaced after the author is locked", func() {
+		f := newChallengeFixture()
+		original := f.enableBundle()
+		f.reconcileChallenge()
+		f.reconcile()
+		Expect(f.client.Delete(ctx, original)).To(Succeed())
+		original.ResourceVersion = ""
+		original.UID = ""
+		Expect(f.client.Create(ctx, original)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
+		Expect(f.problem.Status.ActiveChallenge).NotTo(BeNil())
+	})
+	It("does not lock or stop an author VM with a stale Ready condition and unsafe bundle mount", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		vm := f.vm()
+		vm.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ReadOnly = true
+		Expect(f.client.Update(ctx, vm)).To(Succeed())
+		vm.Status.Ready = true
+		vm.Status.ObservedGeneration = vm.Generation
+		Expect(f.client.Status().Update(ctx, vm)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Accepted").Reason).To(Equal("ProblemNotReady"))
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
+		Expect(f.problem.Status.ActiveChallenge).To(BeNil())
+		Expect(*f.vm().Spec.RunStrategy).To(Equal(virtv1.RunStrategyAlways))
+	})
+	It("keeps the author locked if the bundle source identity changes", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.reconcileChallenge()
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
+		f.problem.Status.BundleRef.SourceHash = "different"
+		Expect(f.client.Status().Update(ctx, f.problem)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("SourceProblemChanged"))
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
+		Expect(f.problem.Status.ActiveChallenge).NotTo(BeNil())
+	})
+	It("rechecks the bundle source hash before creating a snapshot", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.reconcileChallenge()
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
+		f.problem.Status.BundleRef.SourceHash = "changed-after-lock"
+		_, ready, _, err := f.reconciler.ensureSnapshot(ctx, f.challenge, f.problem)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ready).To(BeFalse())
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.challenge), f.challenge)).To(Succeed())
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(apierrors.IsNotFound(f.client.Get(ctx, types.NamespacedName{Name: challengeSnapshotName(f.challenge), Namespace: "default"}, &snapshotv1.VirtualMachineSnapshot{}))).To(BeTrue())
+	})
+	It("rejects a snapshot whose saved bundle disk is writable", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		content := &snapshotv1.VirtualMachineSnapshotContent{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: f.challenge.Status.SnapshotRef.ContentRef.Name, Namespace: "default"}, content)).To(Succeed())
+		content.Spec.Source.VirtualMachine.Spec.Template.Spec.Domain.Devices.Disks[1].Disk.ReadOnly = false
+		Expect(f.client.Update(ctx, content)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("rejects a snapshot with a read-only host-side bundle PVC mount", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		content := &snapshotv1.VirtualMachineSnapshotContent{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: f.challenge.Status.SnapshotRef.ContentRef.Name, Namespace: "default"}, content)).To(Succeed())
+		content.Spec.Source.VirtualMachine.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ReadOnly = true
+		Expect(f.client.Update(ctx, content)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("rejects a restored team VM with a read-only host-side bundle PVC mount", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		vm := f.finishClone("a")
+		vm.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ReadOnly = true
+		Expect(f.client.Update(ctx, vm)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Teams[0].Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("waits for the bundle CSI snapshot before starting team VMs", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		volume := &csiv1.VolumeSnapshot{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: "saved-bundle-volume", Namespace: "default"}, volume)).To(Succeed())
+		volume.Status.ReadyToUse = ptr.To(false)
+		Expect(f.client.Status().Update(ctx, volume)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "SnapshotReady").Reason).To(Equal("SnapshotPending"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("rejects removal of a recorded bundle snapshot from snapshot content", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		content := &snapshotv1.VirtualMachineSnapshotContent{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: f.challenge.Status.SnapshotRef.ContentRef.Name, Namespace: "default"}, content)).To(Succeed())
+		content.Spec.VolumeBackups[1].VolumeSnapshotName = nil
+		Expect(f.client.Update(ctx, content)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("rejects loss of a recorded bundle CSI snapshot binding", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		volume := &csiv1.VolumeSnapshot{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: "saved-bundle-volume", Namespace: "default"}, volume)).To(Succeed())
+		volume.Status.BoundVolumeSnapshotContentName = nil
+		Expect(f.client.Status().Update(ctx, volume)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("rejects a team bundle restored from an unrelated snapshot", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		f.finishClone("a")
+		_, vmName, _ := challengeTeamNames(f.challenge, "a")
+		pvc := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: vmName + "-bundle", Namespace: "default"}, pvc)).To(Succeed())
+		pvc.Spec.DataSource.Name = "unrelated-snapshot"
+		Expect(f.client.Update(ctx, pvc)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Teams[0].Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("rejects a bundle PVC with conflicting data source fields", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.quiesce()
+		f.finishSnapshot()
+		f.finishClone("a")
+		_, vmName, _ := challengeTeamNames(f.challenge, "a")
+		pvc := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: vmName + "-bundle", Namespace: "default"}, pvc)).To(Succeed())
+		pvc.Spec.DataSourceRef = &corev1.TypedObjectReference{APIGroup: ptr.To("snapshot.storage.k8s.io"), Kind: "VolumeSnapshot", Name: "other-snapshot"}
+		Expect(f.client.Update(ctx, pvc)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apiMeta.FindStatusCondition(f.challenge.Status.Teams[0].Conditions, "Failed").Reason).To(Equal("ResourceConflict"))
+		Expect(f.starts).To(BeEmpty())
+	})
+	It("holds the author lock until both bundle snapshot contents are gone", func() {
+		f := newChallengeFixture()
+		bundleSource := f.enableBundle()
+		f.bootTeams()
+		storage := &csiv1.VolumeSnapshotContent{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: "saved-bundle-storage"}, storage)).To(Succeed())
+		storage.Finalizers = []string{"test-backend-cleanup"}
+		Expect(f.client.Update(ctx, storage)).To(Succeed())
+		Expect(f.client.Delete(ctx, f.challenge)).To(Succeed())
+		for _, team := range f.challenge.Status.Teams {
+			vmi := &virtv1.VirtualMachineInstance{}
+			if f.client.Get(ctx, types.NamespacedName{Name: team.VMRef.Name, Namespace: "default"}, vmi) == nil {
+				Expect(f.client.Delete(ctx, vmi)).To(Succeed())
+			}
+		}
+		for range 12 {
+			f.reconcileChallenge()
+		}
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(f.problem), f.problem)).To(Succeed())
+		Expect(f.problem.Status.ActiveChallenge).NotTo(BeNil())
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: storage.Name}, storage)).To(Succeed())
+		Expect(storage.DeletionTimestamp.IsZero()).To(BeFalse())
+		storage.Finalizers = nil
+		Expect(f.client.Update(ctx, storage)).To(Succeed())
+		f.reconcileChallenge()
+		Expect(apierrors.IsNotFound(f.client.Get(ctx, client.ObjectKeyFromObject(f.challenge), &labv1alpha1.ProblemChallenge{}))).To(BeTrue())
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(bundleSource), bundleSource)).To(Succeed())
+	})
+	It("captures bundle snapshot children during cleanup even if the root snapshot is already gone", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.bootTeams()
+		root := &csiv1.VolumeSnapshot{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: "saved-volume", Namespace: "default"}, root)).To(Succeed())
+		Expect(f.client.Delete(ctx, root)).To(Succeed())
+		f.challenge.Status.SnapshotRef.BundleVolumeSnapshotRef = nil
+		f.challenge.Status.SnapshotRef.BundleVolumeSnapshotContentRef = nil
+		Expect(f.client.Status().Update(ctx, f.challenge)).To(Succeed())
+		Expect(f.reconciler.captureDeletingSnapshot(ctx, f.challenge)).To(Succeed())
+		Expect(f.challenge.Status.SnapshotRef.BundleVolumeSnapshotRef.Name).To(Equal("saved-bundle-volume"))
+		Expect(f.challenge.Status.SnapshotRef.BundleVolumeSnapshotContentRef.Name).To(Equal("saved-bundle-storage"))
+	})
+	It("discovers a restored bundle PVC during cleanup when its status was not saved", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.bootTeams()
+		team := &f.challenge.Status.Teams[0]
+		bundle := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: team.BundlePVCRef.Name, Namespace: "default"}, bundle)).To(Succeed())
+		bundle.OwnerReferences = nil
+		Expect(f.client.Update(ctx, bundle)).To(Succeed())
+		team.BundlePVCRef = nil
+		Expect(f.client.Status().Update(ctx, f.challenge)).To(Succeed())
+		f.reconciler = &ProblemChallengeReconciler{Client: f.client, APIReader: f.client, Scheme: f.client.Scheme(), StartVM: f.start}
+		_, err := f.reconciler.deleteTeamVMs(ctx, f.challenge)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(f.challenge.Status.Teams[0].BundlePVCRef.UID).To(Equal(bundle.UID))
+		Expect(f.client.Get(ctx, client.ObjectKeyFromObject(bundle), bundle)).To(Succeed())
+		Expect(ownedByChallenge(bundle, f.challenge)).To(BeTrue())
+	})
 	It("keeps the acquired lock when Problem deletion starts before Accepted status is saved", func() {
 		f := newChallengeFixture()
 		f.reconciler.APIReader = deletingAfterProblemLockReader{
@@ -561,5 +870,27 @@ var _ = Describe("Challenge lifecycle", func() {
 		Expect(f.client.Get(ctx, types.NamespacedName{Name: "saved-storage-content"}, storage)).To(Succeed())
 		Expect(f.reconciler.childChanged(ctx, storage)).To(ContainElement(ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.challenge)}))
 		Expect(f.reconciler.problemChanged(ctx, f.problem)).To(ContainElement(ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.challenge)}))
+	})
+	It("maps bundle cleanup events by recorded UID after their parents disappear", func() {
+		f := newChallengeFixture()
+		f.enableBundle()
+		f.bootTeams()
+		storage := &csiv1.VolumeSnapshotContent{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: "saved-bundle-storage"}, storage)).To(Succeed())
+		volume := &csiv1.VolumeSnapshot{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: "saved-bundle-volume", Namespace: "default"}, volume)).To(Succeed())
+		Expect(f.client.Delete(ctx, volume)).To(Succeed())
+		f.reconciler = &ProblemChallengeReconciler{Client: f.client, APIReader: f.client, Scheme: f.client.Scheme(), StartVM: f.start}
+		request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(f.challenge)}
+		Expect(f.reconciler.childChanged(ctx, storage)).To(ContainElement(request))
+		content := &snapshotv1.VirtualMachineSnapshotContent{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: f.challenge.Status.SnapshotRef.ContentRef.Name, Namespace: "default"}, content)).To(Succeed())
+		Expect(f.client.Delete(ctx, content)).To(Succeed())
+		Expect(f.reconciler.childChanged(ctx, volume)).To(ContainElement(request))
+		pvc := &corev1.PersistentVolumeClaim{}
+		Expect(f.client.Get(ctx, types.NamespacedName{Name: f.challenge.Status.Teams[0].BundlePVCRef.Name, Namespace: "default"}, pvc)).To(Succeed())
+		pvc.OwnerReferences = nil
+		pvc.Labels = nil
+		Expect(f.reconciler.childChanged(ctx, pvc)).To(ContainElement(request))
 	})
 })

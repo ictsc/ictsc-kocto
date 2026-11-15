@@ -27,6 +27,8 @@ import (
 	"time"
 
 	labv1alpha1 "github.com/ictsc/ictsc-kocto/api/v1alpha1"
+	"github.com/ictsc/ictsc-kocto/internal/bundle"
+	csiv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -36,14 +38,174 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	clonev1 "kubevirt.io/api/clone/v1beta1"
 	virtv1 "kubevirt.io/api/core/v1"
 	snapshotv1 "kubevirt.io/api/snapshot/v1beta1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 var _ = Describe("Challenge API lock acquisition", func() {
+	It("locks a bundle-backed Problem and retains both disk identities across a controller restart", func() {
+		p := &labv1alpha1.Problem{ObjectMeta: metav1.ObjectMeta{GenerateName: "challenge-bundle-source-", Namespace: "default"}, Spec: labv1alpha1.ProblemSpec{Source: labv1alpha1.ProblemSourceSpec{Repository: "https://github.com/example/lab", CommitHash: "0123456789012345678901234567890123456789", TopologyFile: "topology.yaml"}, Machine: labv1alpha1.ProblemMachineSpec{CPU: 1, Memory: ptr.To(resource.MustParse("128Mi")), Disk: resource.MustParse("14Gi"), Image: labv1alpha1.ProblemMachineImageSpec{ContainerDisk: "example.invalid/disk:test"}}, Access: []labv1alpha1.AccessEndpoint{{Name: "console", Node: "router", Interface: "eth0"}}}}
+		Expect(k8sClient.Create(ctx, p)).To(Succeed())
+		cleanup := []client.Object{p}
+		DeferCleanup(func() {
+			for i := len(cleanup) - 1; i >= 0; i-- {
+				object := cleanup[i]
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(object), object); apierrors.IsNotFound(err) {
+					continue
+				} else {
+					Expect(err).NotTo(HaveOccurred())
+				}
+				object.SetFinalizers(nil)
+				Expect(k8sClient.Update(ctx, object)).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, object))).To(Succeed())
+			}
+		})
+		dv := problemDataVolume(p, "test-immediate")
+		Expect(controllerutil.SetControllerReference(p, dv, k8sClient.Scheme())).To(Succeed())
+		Expect(k8sClient.Create(ctx, dv)).To(Succeed())
+		cleanup = append(cleanup, dv)
+		dv.Status.Phase = cdiv1.Succeeded
+		Expect(k8sClient.Status().Update(ctx, dv)).To(Succeed())
+		root := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: dv.Name, Namespace: p.Namespace, OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(dv, cdiv1.SchemeGroupVersion.WithKind("DataVolume"))}}, Spec: corev1.PersistentVolumeClaimSpec{AccessModes: dv.Spec.Storage.AccessModes, StorageClassName: dv.Spec.Storage.StorageClassName, VolumeMode: dv.Spec.Storage.VolumeMode, Resources: dv.Spec.Storage.Resources}}
+		Expect(k8sClient.Create(ctx, root)).To(Succeed())
+		cleanup = append(cleanup, root)
+		root.Status.Phase = corev1.ClaimBound
+		Expect(k8sClient.Status().Update(ctx, root)).To(Succeed())
+		p.Status.BundleRef = &labv1alpha1.ProblemBundleReference{SourceHash: bundle.SourceHash(p.Spec.Source), BuilderImage: "example.invalid/builder", StorageClassName: "test-immediate", Ready: true}
+		bundlePVC := problemBundlePVC(p)
+		Expect(controllerutil.SetControllerReference(p, bundlePVC, k8sClient.Scheme())).To(Succeed())
+		Expect(k8sClient.Create(ctx, bundlePVC)).To(Succeed())
+		cleanup = append(cleanup, bundlePVC)
+		bundlePVC.Status.Phase = corev1.ClaimBound
+		Expect(k8sClient.Status().Update(ctx, bundlePVC)).To(Succeed())
+		p.Status.BundleRef.PVCUID = bundlePVC.UID
+		vm := problemVirtualMachine(p)
+		Expect(controllerutil.SetControllerReference(p, vm, k8sClient.Scheme())).To(Succeed())
+		Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+		cleanup = append(cleanup, vm)
+		vm.Status.Ready = true
+		vm.Status.ObservedGeneration = vm.Generation
+		Expect(k8sClient.Status().Update(ctx, vm)).To(Succeed())
+		p.Status.DiskRef = &labv1alpha1.ProblemDiskReference{DiskName: dv.Name, UID: dv.UID, PVCUID: root.UID}
+		p.Status.VMRef = &labv1alpha1.ProblemVMReference{VMName: vm.Name, UID: vm.UID}
+		apiMeta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{Type: "VMReady", Status: metav1.ConditionTrue, Reason: "VMReady", ObservedGeneration: p.Generation})
+		Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+		c := &labv1alpha1.ProblemChallenge{ObjectMeta: metav1.ObjectMeta{GenerateName: "challenge-bundle-api-", Namespace: p.Namespace}, Spec: labv1alpha1.ProblemChallengeSpec{ProblemRef: labv1alpha1.ProblemReference{Name: p.Name}, Placement: labv1alpha1.ProblemChallengePlacementSpec{NodeSelector: map[string]string{"node": "worker"}}, Teams: []labv1alpha1.ProblemChallengeTeamSpec{{ID: "a"}}}}
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		cleanup = append(cleanup, c)
+		r := &ProblemChallengeReconciler{Client: k8sClient, APIReader: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(c), c)).To(Succeed())
+		Expect(apiMeta.IsStatusConditionTrue(c.Status.Conditions, "Accepted")).To(BeTrue())
+		Expect(c.Status.SourceProblem.DiskPVCUID).To(Equal(root.UID))
+		Expect(c.Status.SourceProblem.BundlePVCUID).To(Equal(bundlePVC.UID))
+		Expect(c.Status.SourceProblem.BundleSourceHash).To(Equal(p.Status.BundleRef.SourceHash))
+		r = &ProblemChallengeReconciler{Client: k8sClient, APIReader: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(p), p)).To(Succeed())
+		Expect(p.Status.ActiveChallenge.UID).To(Equal(c.UID))
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(vm), vm)).To(Succeed())
+		vm.Spec.RunStrategy = ptr.To(virtv1.RunStrategyHalted)
+		Expect(k8sClient.Update(ctx, vm)).To(Succeed())
+		apiMeta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{Type: "Quiesced", Status: metav1.ConditionTrue, Reason: "AuthorStopped", ObservedGeneration: p.Generation})
+		Expect(k8sClient.Status().Update(ctx, p)).To(Succeed())
+		_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		Expect(err).NotTo(HaveOccurred())
+		s := &snapshotv1.VirtualMachineSnapshot{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: challengeSnapshotName(c), Namespace: p.Namespace}, s)).To(Succeed())
+		cleanup = append(cleanup, s)
+		Expect(s.Spec.Source.Name).To(Equal(vm.Name))
+		Expect(ownedByChallenge(s, c)).To(BeTrue())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(c), c)).To(Succeed())
+		Expect(c.Status.SnapshotRef.UID).To(Equal(s.UID))
+		content := &snapshotv1.VirtualMachineSnapshotContent{ObjectMeta: metav1.ObjectMeta{Name: challengeSnapshotContentName(s.UID), Namespace: p.Namespace}, Spec: snapshotv1.VirtualMachineSnapshotContentSpec{VirtualMachineSnapshotName: &s.Name, Source: snapshotv1.SourceSpec{VirtualMachine: &snapshotv1.VirtualMachine{ObjectMeta: vm.ObjectMeta, Spec: vm.Spec}}}}
+		for _, disk := range []struct {
+			name string
+			pvc  *corev1.PersistentVolumeClaim
+		}{{"root", root}, {"bundle", bundlePVC}} {
+			volumeName := string(s.UID) + "-" + disk.name
+			content.Spec.VolumeBackups = append(content.Spec.VolumeBackups, snapshotv1.VolumeBackup{VolumeName: disk.name, PersistentVolumeClaim: snapshotv1.PersistentVolumeClaim{ObjectMeta: disk.pvc.ObjectMeta, Spec: disk.pvc.Spec}, VolumeSnapshotName: &volumeName})
+		}
+		Expect(k8sClient.Create(ctx, content)).To(Succeed())
+		cleanup = append(cleanup, content)
+		content.Status = &snapshotv1.VirtualMachineSnapshotContentStatus{ReadyToUse: ptr.To(true)}
+		Expect(k8sClient.Status().Update(ctx, content)).To(Succeed())
+		for _, backup := range content.Spec.VolumeBackups {
+			storageName := "storage-" + *backup.VolumeSnapshotName
+			volume := &csiv1.VolumeSnapshot{ObjectMeta: metav1.ObjectMeta{Name: *backup.VolumeSnapshotName, Namespace: p.Namespace, OwnerReferences: []metav1.OwnerReference{*metav1.NewControllerRef(content, snapshotv1.SchemeGroupVersion.WithKind("VirtualMachineSnapshotContent"))}}, Spec: csiv1.VolumeSnapshotSpec{Source: csiv1.VolumeSnapshotSource{PersistentVolumeClaimName: ptr.To(backup.PersistentVolumeClaim.Name)}}}
+			Expect(k8sClient.Create(ctx, volume)).To(Succeed())
+			cleanup = append(cleanup, volume)
+			volume.Status = &csiv1.VolumeSnapshotStatus{ReadyToUse: ptr.To(true), BoundVolumeSnapshotContentName: &storageName}
+			Expect(k8sClient.Status().Update(ctx, volume)).To(Succeed())
+			storage := &csiv1.VolumeSnapshotContent{ObjectMeta: metav1.ObjectMeta{Name: storageName}, Spec: csiv1.VolumeSnapshotContentSpec{VolumeSnapshotRef: corev1.ObjectReference{Name: volume.Name, Namespace: volume.Namespace, UID: volume.UID}, DeletionPolicy: csiv1.VolumeSnapshotContentDelete, Driver: "test.csi", Source: csiv1.VolumeSnapshotContentSource{VolumeHandle: ptr.To("test-handle")}}}
+			Expect(k8sClient.Create(ctx, storage)).To(Succeed())
+			cleanup = append(cleanup, storage)
+		}
+		s.Status = &snapshotv1.VirtualMachineSnapshotStatus{SourceUID: &vm.UID, VirtualMachineSnapshotContentName: &content.Name, Phase: snapshotv1.Succeeded, ReadyToUse: ptr.To(true), SnapshotVolumes: &snapshotv1.SnapshotVolumesLists{IncludedVolumes: []string{"root", "bundle"}}}
+		Expect(k8sClient.Status().Update(ctx, s)).To(Succeed())
+		_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(c), c)).To(Succeed())
+		Expect(apiMeta.IsStatusConditionTrue(c.Status.Conditions, "SnapshotReady")).To(BeTrue())
+		Expect(c.Status.SnapshotRef.VolumeSnapshotRef).NotTo(BeNil())
+		Expect(c.Status.SnapshotRef.BundleVolumeSnapshotRef).NotTo(BeNil())
+		Expect(c.Status.SnapshotRef.VolumeSnapshotContentRef).NotTo(BeNil())
+		Expect(c.Status.SnapshotRef.BundleVolumeSnapshotContentRef).NotTo(BeNil())
+		cloneName, teamVMName, teamRootName := challengeTeamNames(c, "a")
+		clone := &clonev1.VirtualMachineClone{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cloneName, Namespace: p.Namespace}, clone)).To(Succeed())
+		cleanup = append(cleanup, clone)
+		Expect(clone.Spec.Source.Name).To(Equal(s.Name))
+		clone.Status.Phase = clonev1.Succeeded
+		Expect(k8sClient.Status().Update(ctx, clone)).To(Succeed())
+		teamVM := problemVirtualMachine(p)
+		teamVM.Name = teamVMName
+		teamVM.Spec.RunStrategy = ptr.To(virtv1.RunStrategyManual)
+		teamVM.Annotations = map[string]string{"restore.kubevirt.io/lastRestoreUID": "tmp-restore-" + string(clone.UID) + "-test"}
+		teamVM.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim.ClaimName = teamRootName
+		teamVM.Spec.Template.Spec.Volumes[1].PersistentVolumeClaim.ClaimName = teamVMName + "-bundle"
+		Expect(k8sClient.Create(ctx, teamVM)).To(Succeed())
+		cleanup = append(cleanup, teamVM)
+		for _, disk := range []struct {
+			name     string
+			source   *corev1.PersistentVolumeClaim
+			snapshot string
+		}{{teamRootName, root, c.Status.SnapshotRef.VolumeSnapshotRef.Name}, {teamVMName + "-bundle", bundlePVC, c.Status.SnapshotRef.BundleVolumeSnapshotRef.Name}} {
+			restored := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: disk.name, Namespace: p.Namespace}, Spec: *disk.source.Spec.DeepCopy()}
+			restored.Spec.DataSource = &corev1.TypedLocalObjectReference{APIGroup: ptr.To("snapshot.storage.k8s.io"), Kind: "VolumeSnapshot", Name: disk.snapshot}
+			Expect(k8sClient.Create(ctx, restored)).To(Succeed())
+			cleanup = append(cleanup, restored)
+			restored.Status.Phase = corev1.ClaimBound
+			Expect(k8sClient.Status().Update(ctx, restored)).To(Succeed())
+		}
+		starts := 0
+		r.StartVM = func(context.Context, *virtv1.VirtualMachine) error { starts++; return nil }
+		_, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(c)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(starts).To(Equal(1))
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(c), c)).To(Succeed())
+		Expect(c.Status.Teams[0].PVCRef.Name).To(Equal(teamRootName))
+		Expect(c.Status.Teams[0].BundlePVCRef.Name).To(Equal(teamVMName + "-bundle"))
+	})
+	It("preserves bundle source, snapshot and team identities in API status", func() {
+		c := &labv1alpha1.ProblemChallenge{ObjectMeta: metav1.ObjectMeta{GenerateName: "challenge-bundle-status-", Namespace: "default"}, Spec: labv1alpha1.ProblemChallengeSpec{ProblemRef: labv1alpha1.ProblemReference{Name: "source"}, Placement: labv1alpha1.ProblemChallengePlacementSpec{NodeSelector: map[string]string{"node": "worker"}}, Teams: []labv1alpha1.ProblemChallengeTeamSpec{{ID: "a"}}}}
+		Expect(k8sClient.Create(ctx, c)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, c)).To(Succeed()) })
+		c.Status.SourceProblem = &labv1alpha1.SourceProblemReference{Name: "source", UID: "problem-uid", Generation: 1, DiskPVCUID: "root-uid", BundlePVCUID: "bundle-uid", BundleSourceHash: "bundle-hash"}
+		c.Status.SnapshotRef = &labv1alpha1.ChallengeSnapshotReference{Name: "snapshot", UID: "snapshot-uid", BundleVolumeSnapshotRef: &labv1alpha1.TeamResourceReference{Name: "bundle-snapshot", UID: "bundle-snapshot-uid"}, BundleVolumeSnapshotContentRef: &labv1alpha1.TeamResourceReference{Name: "bundle-content", UID: "bundle-content-uid"}}
+		c.Status.Teams = []labv1alpha1.ProblemChallengeTeamStatus{{ID: "a", BundlePVCRef: &labv1alpha1.TeamResourceReference{Name: "team-bundle", UID: "team-bundle-uid"}}}
+		Expect(k8sClient.Status().Update(ctx, c)).To(Succeed())
+		actual := &labv1alpha1.ProblemChallenge{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(c), actual)).To(Succeed())
+		Expect(actual.Status).To(Equal(c.Status))
+	})
 	It("sends the initial start to the KubeVirt subresource API with the manager credentials", func() {
 		called := 0
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

@@ -317,8 +317,37 @@ Flatcarはbundleをroot側へ取り込み、Containerlabを起動します。ゲ
 - builder imageのpull Secretは、そのimageを取得するためのものです。問題用OCIイメージの認証情報をJobへ渡す機能はありません。
 
 Job完了・PVC Bound・writer Podの解放後にVMを作成します。失敗したJobや欠落した記録済みPVCを
-自動再生成せず、作問済みデータを保護します。既存Problemへの後付け、source更新、bundle付き
-ProblemChallengeは対象外です。
+自動再生成せず、作問済みデータを保護します。既存Problemへの後付けとsource更新は対象外です。
+
+bundle付きProblemのProblemChallengeは、作問VM停止後にrootとbundleの両方をSnapshotへ保存し、
+チームごとに独立したPVCへ復元します。bundleディスクはゲストから読み取り専用です。
+両ディスクに対応したCSI Snapshotとストレージ容量が必要です。ChallengeのReadyはVMの状態を示し、
+ゲスト内のContainerlab展開や通信の成功までは保証しません。Challenge削除時はチームVM・PVCと
+Snapshotの削除を確認してから作問側のロックを解除します。
+
+同じnamespaceの `offline-containerlab` を２チームへ展開する例です。`nodeSelector` は実際に
+KubeVirt VMを配置できるNodeのラベルへ変更してください。作問VMはChallengeのロック中に停止し、
+Challengeを削除してクリーンアップが完了した後に再開します。
+
+```yaml
+apiVersion: lab.icttoracon.net/v1alpha1
+kind: ProblemChallenge
+metadata:
+  name: offline-containerlab-round
+spec:
+  problemRef:
+    name: offline-containerlab
+  placement:
+    nodeSelector:
+      kubevirt.io/schedulable: "true"
+  teams:
+    - id: team-a
+    - id: team-b
+```
+
+`spec` は作成後に変更できません。チームVMの初回起動後にVMIが停止・消失した場合は、
+競技中の状態を保護するため自動再起動しません。Challengeのconditionsと各チームのconditions、
+Snapshot・Clone・PVC・VMの状態を確認してください。
 
 Jobが再試行上限に達すると、Problemのconditionに `BundleBuildFailed` が表示されます。
 JobとそのPodの状態・ログを確認し、原因を解消してください。記録済みのJobを削除しても

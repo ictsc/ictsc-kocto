@@ -125,7 +125,7 @@ func (r *ProblemChallengeReconciler) captureDeletingSnapshot(ctx context.Context
 		c.Status.SnapshotRef = &labv1alpha1.ChallengeSnapshotReference{Name: s.Name, UID: s.UID}
 	}
 	if c.Status.SourceProblem != nil {
-		_, _, err = r.recordSnapshotChildren(ctx, c, s)
+		_, _, err = r.recordSnapshotChildren(ctx, c, s, true)
 		// rootが除外された保存も片付ける。存在しない子は、削除がすでに進んだものとして扱う。
 		if failure, ok := err.(*challengeResourceError); ok && (failure.reason == "RootDiskExcluded" || failure.reason == "SnapshotContentMissing" || failure.reason == "VolumeSnapshotMissing" || failure.reason == "VolumeSnapshotContentMissing") {
 			err = nil
@@ -230,6 +230,23 @@ func (r *ProblemChallengeReconciler) deleteTeamVMs(ctx context.Context, c *labv1
 		} else if !apierrors.IsNotFound(pvcErr) {
 			return false, pvcErr
 		}
+		if c.Status.SourceProblem != nil && c.Status.SourceProblem.BundlePVCUID != "" {
+			bundle := &corev1.PersistentVolumeClaim{}
+			bundleErr := r.reader().Get(ctx, types.NamespacedName{Name: name + "-bundle", Namespace: c.Namespace}, bundle)
+			if bundleErr == nil {
+				if !ownedByChallenge(bundle, c) {
+					if err := r.adoptTeamDisk(ctx, c, team, bundle, "bundle"); err != nil {
+						return false, err
+					}
+				}
+				if team.BundlePVCRef != nil && team.BundlePVCRef.UID != bundle.UID {
+					return false, resourceFailure("ResourceConflict", "Recorded bundle PVC identity changed during cleanup")
+				}
+				team.BundlePVCRef = resourceRef(bundle)
+			} else if !apierrors.IsNotFound(bundleErr) {
+				return false, bundleErr
+			}
+		}
 		if err := r.saveChallenge(ctx, c); err != nil {
 			return false, err
 		}
@@ -262,24 +279,36 @@ func (r *ProblemChallengeReconciler) deleteTeamVMs(ctx context.Context, c *labv1
 func (r *ProblemChallengeReconciler) deleteTeamPVCs(ctx context.Context, c *labv1alpha1.ProblemChallenge) (bool, error) {
 	pending := false
 	for _, team := range c.Status.Teams {
-		_, _, name := challengeTeamNames(c, team.ID)
-		pvc := &corev1.PersistentVolumeClaim{}
-		err := r.reader().Get(ctx, types.NamespacedName{Name: name, Namespace: c.Namespace}, pvc)
-		if apierrors.IsNotFound(err) {
-			continue
+		_, vmName, name := challengeTeamNames(c, team.ID)
+		disks := []struct {
+			name string
+			ref  *labv1alpha1.TeamResourceReference
+		}{{name, team.PVCRef}}
+		if c.Status.SourceProblem != nil && c.Status.SourceProblem.BundlePVCUID != "" {
+			disks = append(disks, struct {
+				name string
+				ref  *labv1alpha1.TeamResourceReference
+			}{vmName + "-bundle", team.BundlePVCRef})
 		}
-		if err != nil {
-			return false, err
-		}
-		if team.PVCRef == nil || team.PVCRef.Name != pvc.Name || team.PVCRef.UID != pvc.UID || !ownedByChallenge(pvc, c) {
-			return false, resourceFailure("ResourceConflict", "Cannot prove restored PVC ownership")
-		}
-		if pvc.DeletionTimestamp.IsZero() {
-			if err := r.Delete(ctx, pvc, client.Preconditions{UID: &pvc.UID}); err != nil {
-				return false, client.IgnoreNotFound(err)
+		for _, disk := range disks {
+			pvc := &corev1.PersistentVolumeClaim{}
+			err := r.reader().Get(ctx, types.NamespacedName{Name: disk.name, Namespace: c.Namespace}, pvc)
+			if apierrors.IsNotFound(err) {
+				continue
 			}
+			if err != nil {
+				return false, err
+			}
+			if disk.ref == nil || disk.ref.Name != pvc.Name || disk.ref.UID != pvc.UID || !ownedByChallenge(pvc, c) {
+				return false, resourceFailure("ResourceConflict", "Cannot prove restored PVC ownership")
+			}
+			if pvc.DeletionTimestamp.IsZero() {
+				if err := r.Delete(ctx, pvc, client.Preconditions{UID: &pvc.UID}); err != nil {
+					return false, client.IgnoreNotFound(err)
+				}
+			}
+			pending = true
 		}
-		pending = true
 	}
 	return pending, nil
 }
@@ -318,6 +347,7 @@ func (r *ProblemChallengeReconciler) deleteSavedSnapshot(ctx context.Context, c 
 	}
 	if ref.ContentRef != nil {
 		objects = append(objects, snapshotChild{ref.VolumeSnapshotRef, &csiv1.VolumeSnapshot{}, "VirtualMachineSnapshotContent", ref.ContentRef.UID, c.Namespace})
+		objects = append(objects, snapshotChild{ref.BundleVolumeSnapshotRef, &csiv1.VolumeSnapshot{}, "VirtualMachineSnapshotContent", ref.ContentRef.UID, c.Namespace})
 	}
 	for _, entry := range objects {
 		if entry.ref == nil {
@@ -345,25 +375,29 @@ func (r *ProblemChallengeReconciler) deleteSavedSnapshot(ctx context.Context, c 
 		}
 		return true, nil
 	}
-	if storageRef := ref.VolumeSnapshotContentRef; storageRef != nil {
-		storage := &csiv1.VolumeSnapshotContent{}
-		err := r.reader().Get(ctx, types.NamespacedName{Name: storageRef.Name}, storage)
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		binding := storage.Spec.VolumeSnapshotRef
-		if ref.VolumeSnapshotRef == nil || storage.UID != storageRef.UID || binding.UID != ref.VolumeSnapshotRef.UID || binding.Name != ref.VolumeSnapshotRef.Name || binding.Namespace != c.Namespace || storage.Spec.DeletionPolicy != csiv1.VolumeSnapshotContentDelete {
-			return false, resourceFailure("ResourceConflict", "Do not delete unrelated CSI snapshot content")
-		}
-		if storage.DeletionTimestamp.IsZero() {
-			if err := r.Delete(ctx, storage, client.Preconditions{UID: &storage.UID}); err != nil {
-				return false, client.IgnoreNotFound(err)
+	for _, pair := range []struct {
+		storageRef, volumeRef *labv1alpha1.TeamResourceReference
+	}{{ref.VolumeSnapshotContentRef, ref.VolumeSnapshotRef}, {ref.BundleVolumeSnapshotContentRef, ref.BundleVolumeSnapshotRef}} {
+		if storageRef := pair.storageRef; storageRef != nil {
+			storage := &csiv1.VolumeSnapshotContent{}
+			err := r.reader().Get(ctx, types.NamespacedName{Name: storageRef.Name}, storage)
+			if apierrors.IsNotFound(err) {
+				continue
 			}
+			if err != nil {
+				return false, err
+			}
+			binding := storage.Spec.VolumeSnapshotRef
+			if pair.volumeRef == nil || storage.UID != storageRef.UID || binding.UID != pair.volumeRef.UID || binding.Name != pair.volumeRef.Name || binding.Namespace != c.Namespace || storage.Spec.DeletionPolicy != csiv1.VolumeSnapshotContentDelete {
+				return false, resourceFailure("ResourceConflict", "Do not delete unrelated CSI snapshot content")
+			}
+			if storage.DeletionTimestamp.IsZero() {
+				if err := r.Delete(ctx, storage, client.Preconditions{UID: &storage.UID}); err != nil {
+					return false, client.IgnoreNotFound(err)
+				}
+			}
+			return true, nil
 		}
-		return true, nil
 	}
 	return false, nil
 }

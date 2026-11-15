@@ -132,6 +132,14 @@ type SourceProblemReference struct {
 	// +kubebuilder:validation:MinLength=1
 	// +optional
 	DiskPVCUID types.UID `json:"diskPVCUID,omitempty"`
+
+	// BundlePVCUID identifies the source bundle PVC, if the Problem uses one.
+	// +optional
+	BundlePVCUID types.UID `json:"bundlePVCUID,omitempty"`
+
+	// BundleSourceHash fixes the bundle inputs accepted by this Challenge.
+	// +optional
+	BundleSourceHash string `json:"bundleSourceHash,omitempty"`
 }
 
 // ChallengeSnapshotReferenceは、出題元のProblemのスナップショットへの参照を表します。
@@ -160,6 +168,13 @@ type ChallengeSnapshotReference struct {
 	// このリソースはクラスタ全体に属するため、namespaceを指定せずに参照する。
 	// +optional
 	VolumeSnapshotContentRef *TeamResourceReference `json:"volumeSnapshotContentRef,omitempty"`
+
+	// BundleVolumeSnapshotRef and BundleVolumeSnapshotContentRef track the
+	// second disk independently, including during interrupted cleanup.
+	// +optional
+	BundleVolumeSnapshotRef *TeamResourceReference `json:"bundleVolumeSnapshotRef,omitempty"`
+	// +optional
+	BundleVolumeSnapshotContentRef *TeamResourceReference `json:"bundleVolumeSnapshotContentRef,omitempty"`
 }
 
 // ProblemChallengeTeamStatusは、各チームの問題環境の状態を表します。
@@ -180,6 +195,10 @@ type ProblemChallengeTeamStatus struct {
 	// PVCRefは、復元したチームのroot PVCへの参照を示します。
 	// +optional
 	PVCRef *TeamResourceReference `json:"pvcRef,omitempty"`
+
+	// BundlePVCRef identifies the team's independently restored bundle disk.
+	// +optional
+	BundlePVCRef *TeamResourceReference `json:"bundlePVCRef,omitempty"`
 
 	// Conditionsは、チームの問題環境の状態を種類ごとに表します。
 	// +listType=map
