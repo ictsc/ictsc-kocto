@@ -283,7 +283,7 @@ func (r *ProblemChallengeReconciler) adoptTeamDisk(ctx context.Context, c *labv1
 		matches = true
 	}
 	if !matches {
-		return resourceFailure("ResourceConflict", "Team PVC was not restored from this root snapshot")
+		return resourceFailure("ResourceConflict", "Team PVC was not restored from this disk snapshot")
 	}
 	// PVCの生成はKubeVirt Restoreへ委ねる。保存元と異なるclass/modeを採用して起動しない。
 	// 元のPVCが停止後に読めなくなっても、保存済みの設定から検証できる。
