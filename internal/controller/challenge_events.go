@@ -115,10 +115,10 @@ func (r *ProblemChallengeReconciler) childRequests(ctx context.Context, object c
 			if s.UID == object.GetUID() {
 				return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(&c)}}
 			}
-			refs = append(refs, s.ContentRef, s.VolumeSnapshotRef, s.VolumeSnapshotContentRef)
+			refs = append(refs, s.ContentRef, s.VolumeSnapshotRef, s.VolumeSnapshotContentRef, s.BundleVolumeSnapshotRef, s.BundleVolumeSnapshotContentRef)
 		}
 		for _, team := range c.Status.Teams {
-			refs = append(refs, team.CloneRef, team.VMRef, team.PVCRef)
+			refs = append(refs, team.CloneRef, team.VMRef, team.PVCRef, team.BundlePVCRef)
 		}
 		for _, ref := range refs {
 			if ref != nil && ref.UID == object.GetUID() {
