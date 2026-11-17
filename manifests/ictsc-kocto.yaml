@@ -175,38 +175,6 @@ spec:
               snapshotRef:
                 description: SnapshotRefは、出題元のProblemのスナップショットを示します。
                 properties:
-                  bundleVolumeSnapshotContentRef:
-                    description: TeamResourceReferenceは、チーム環境を構成するリソースへの参照を表します。
-                    properties:
-                      name:
-                        description: Nameは、参照するリソースの名前を記録します。
-                        minLength: 1
-                        type: string
-                      uid:
-                        description: UIDは、参照するリソースのUIDを記録します。
-                        minLength: 1
-                        type: string
-                    required:
-                    - name
-                    - uid
-                    type: object
-                  bundleVolumeSnapshotRef:
-                    description: |-
-                      BundleVolumeSnapshotRef and BundleVolumeSnapshotContentRef track the
-                      second disk independently, including during interrupted cleanup.
-                    properties:
-                      name:
-                        description: Nameは、参照するリソースの名前を記録します。
-                        minLength: 1
-                        type: string
-                      uid:
-                        description: UIDは、参照するリソースのUIDを記録します。
-                        minLength: 1
-                        type: string
-                    required:
-                    - name
-                    - uid
-                    type: object
                   contentRef:
                     description: |-
                       ContentRefは、保存したVM構成とディスク一覧を持つVirtualMachineSnapshotContentを示す。
@@ -271,14 +239,6 @@ spec:
               sourceProblem:
                 description: SourceProblemは、出題元のProblemを示します
                 properties:
-                  bundlePVCUID:
-                    description: BundlePVCUID identifies the source bundle PVC, if
-                      the Problem uses one.
-                    type: string
-                  bundleSourceHash:
-                    description: BundleSourceHash fixes the bundle inputs accepted
-                      by this Challenge.
-                    type: string
                   diskPVCUID:
                     description: |-
                       DiskPVCUIDは、Challengeが受け入れた時点の作問ディスクPVCのUIDを記録します。
@@ -307,22 +267,6 @@ spec:
                 items:
                   description: ProblemChallengeTeamStatusは、各チームの問題環境の状態を表します。
                   properties:
-                    bundlePVCRef:
-                      description: BundlePVCRef identifies the team's independently
-                        restored bundle disk.
-                      properties:
-                        name:
-                          description: Nameは、参照するリソースの名前を記録します。
-                          minLength: 1
-                          type: string
-                        uid:
-                          description: UIDは、参照するリソースのUIDを記録します。
-                          minLength: 1
-                          type: string
-                      required:
-                      - name
-                      - uid
-                      type: object
                     cloneRef:
                       description: CloneRefは、チーム用のVirtualMachineCloneへの参照を示します。
                       properties:
@@ -1313,11 +1257,11 @@ spec:
         - --metrics-bind-address=:8443
         - --leader-elect
         - --health-probe-bind-address=:8081
-        - --bundle-builder-image=ghcr.io/ictsc/ictsc-kocto-bundle-builder@sha256:40c293277f4f27188089130b141a354e9ae8608b067b0b00591359aa8d316474
+        - --bundle-builder-image=ghcr.io/ictsc/ictsc-kocto-bundle-builder@sha256:51a50004cf142908e9cfa677e5dc48d6dfbccdb853e70a4d384b1a86b29239ed
         - --bundle-builder-pull-secret=ghcr-pull
         command:
         - /manager
-        image: ghcr.io/ictsc/ictsc-kocto:a1fd35b071befb4faf93a90e0d034f676f058308
+        image: ghcr.io/ictsc/ictsc-kocto:22329bc620819518c2ab023779f049751158d905
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
